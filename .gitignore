@@ -1,0 +1,18 @@
+# Built files and release zips (attach zips to a GitHub Release instead)
+*.zip
+dist/
+Companion/bin/
+Companion/release/
+*.exe
+*.pdb
+
+# Other projects kept in this folder
+AltLedger/
+
+# Editor / OS junk
+*.bak
+*.old
+Thumbs.db
+desktop.ini
+.vs/
+.vscode/

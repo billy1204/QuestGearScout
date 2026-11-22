@@ -1,0 +1,5 @@
+<Bindings>
+	<Binding name="QUESTGEARSCOUT_TOGGLE" header="QUESTGEARSCOUT" category="ADDONS">
+		QuestGearScout.ToggleUI()
+	</Binding>
+</Bindings>
