@@ -35,18 +35,19 @@ namespace QGSCompanion
             this.currentDir = currentDir; this.useFolder = useFolder; this.openFolder = openFolder; this.confirm = confirm;
             results = cached;
             fBody = new Font("Segoe UI", 9f); fBold = new Font("Segoe UI Semibold", 9f);
-            fHead = new Font("Segoe UI Semibold", 11f); fBig = new Font("Segoe UI Semibold", 15f);
+            fHead = new Font("Segoe UI Semibold", 11f); fBig = new Font("Palatino Linotype", 15f, FontStyle.Bold);
             Text = "Addon check";
             Font = fBody;
             AutoScaleMode = AutoScaleMode.None;
             FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
             StartPosition = FormStartPosition.CenterParent;
-            BackColor = Color.White;
+            BackColor = Pal.Card;
+            ForeColor = Pal.Text;
             ClientSize = new Size(S(700), S(580));
 
             var title = new Label { Text = "Addon check", Font = fBig, AutoSize = true, Location = new Point(S(24), S(16)) };
             subtitle = new Label { ForeColor = Pal.Sub, AutoSize = false, Location = new Point(S(24), S(48)), Size = new Size(S(650), S(18)), AutoEllipsis = true };
-            checks = new Panel { Location = new Point(S(24), S(76)), Size = new Size(S(652), S(250)), AutoScroll = true, BackColor = Color.White };
+            checks = new Panel { Location = new Point(S(24), S(76)), Size = new Size(S(652), S(250)), AutoScroll = true, BackColor = Pal.Card };
 
             var sep = new Label { AutoSize = false, BackColor = Pal.CardBorder, Location = new Point(S(24), S(336)), Size = new Size(S(652), 1) };
             var otherHead = new Label { Text = "Game folders on this PC", Font = fHead, AutoSize = true, Location = new Point(S(24), S(346)) };
@@ -82,6 +83,8 @@ namespace QGSCompanion
             CancelButton = close;
             Controls.AddRange(new Control[] { title, subtitle, checks, sep, otherHead, scanBtn, scanNote, found, useBtn, openBtn, again, close });
             FormClosed += (s, e) => closed = true;
+            Theme.Form(this);
+            Theme.DarkScroll(checks);
 
             Recheck();
             if (results != null) ShowResults();
@@ -116,8 +119,8 @@ namespace QGSCompanion
 
         Panel MakeRow(CheckItem item, int w)
         {
-            var row = new Panel { Width = w, BackColor = Color.White };
-            Color c = item.State == "ok" ? Pal.Success : item.State == "warn" ? Pal.Warn : item.State == "bad" ? Pal.Hex("#B42318") : Pal.Accent;
+            var row = new Panel { Width = w, BackColor = Pal.Card };
+            Color c = item.State == "ok" ? Pal.Success : item.State == "warn" ? Pal.Warn : item.State == "bad" ? Pal.Error : Pal.Accent;
             string iconName = item.State == "ok" ? "check" : item.State == "info" ? "info" : "warn";
             var icon = new PictureBox { Image = Draw.IconBitmap(iconName, S(16), c), Size = new Size(S(16), S(16)), Location = new Point(0, S(2)) };
             FlatBtn btn = null;
@@ -158,7 +161,7 @@ namespace QGSCompanion
                                  "\n\nNothing is deleted except a folder the move leaves empty. If something is in the way, it's kept with \".old\" added to its name. " +
                                  "Close the game first, or restart it afterwards.")) return;
                     lastMessage = AddonCheck.FixLayout(status);
-                    if (!testMode) MessageBox.Show(this, lastMessage + "\n\nRestart the game (or /reload) to load it.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    if (!testMode) Theme.Box(this, lastMessage + "\n\nRestart the game (or /reload) to load it.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
                     useFolder(status.GameDir);   // reload the main window
                     Recheck();
                 }
@@ -167,7 +170,7 @@ namespace QGSCompanion
             {
                 lastMessage = "error: " + ex.Message;
                 if (!testMode)
-                    MessageBox.Show(this, "That didn't work, so nothing was changed (any step already done was undone).\n\n" + (ex is UnauthorizedAccessException || ex is IOException
+                    Theme.Box(this, "That didn't work, so nothing was changed (any step already done was undone).\n\n" + (ex is UnauthorizedAccessException || ex is IOException
                         ? "Windows wouldn't let this app move the folder. Usually something has a file or window open in it: close the game, any File Explorer " +
                           "or editor windows showing that folder, then try again. If it still fails, run this app as administrator, or move the folder yourself in File Explorer."
                         : "") + "\n\nDetails: " + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error);

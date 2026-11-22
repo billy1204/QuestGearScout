@@ -6,13 +6,15 @@ A small Windows app that shows what QuestGearScout learned in game, and helps yo
 Run `QuestGearScoutCompanion.exe`. It finds your WoW Forever folder by itself. If it can't, it asks you to **Choose game folder...** (the `_forever_` folder; `Interface`, `AddOns` or `WTF` inside it work too). Then play: WoW saves the addon's data when you **log out, type /reload, or exit**, and the app updates by itself a moment later.
 
 ## The window
+The app uses a dark "Ember Forge" look: dark iron panels, ember-orange buttons and gold trim. Windows 10 and 11 also get a dark title bar.
+
 - **The banner at the top** tells you what's going on and gives you the one button to press:
   - *You found 1 new chain* -> **Add 1 to addon** (or **Share with friends**)
   - *Added 1 chain to the addon* -> **Publish...** (or **Undo**)
   - *Nothing new yet* -> keep playing
   - A warning if the addon isn't installed in the folder you picked
   The step trail (1 Add to addon > 2 /reload in game > 3 Publish to CurseForge) shows where you are.
-- **The list** has new finds at the top, then every chain grouped by zone. Each chain says *New*, *Added by you*, *In the addon* (a grey check) or *Can't check*. Reward names are in their quality colour; dungeons are purple. Chains that just appeared are highlighted in yellow for a few seconds.
+- **The list** has new finds at the top, then every chain grouped by zone. Each chain says *New*, *Added by you*, *In the addon* (a grey check) or *Can't check*. Reward names are in their quality colour; dungeons are purple. Chains that just appeared are highlighted in amber for a few seconds.
 - **The right side** shows the selected chain step by step: who gives it and where (with **Copy location**), the reward, how to get it, and the buttons that fit that chain. Select several chains to act on all of them.
 - **Search, filters and views**: the search box (Ctrl+F), the All / New / Gear / Dungeons pills, the gear quality filter, and **Notebook / Table**. Table shows one line per chain with sortable columns.
 - **Publish menu**: *Publish a new version...* walks you through adding your finds, bumping the version number and building the CurseForge zip (junk like `.git` and backup files is left out). It also has *Save share file...* and links to the addon, saved-data and backups folders.

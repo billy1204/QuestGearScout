@@ -23,8 +23,8 @@ namespace QGSCompanion
         string factionView = "all";     // "all", "A", "H"
         Rectangle sharingPillRect;
 
-        static readonly Color Alliance = Pal.Hex("#1F5FBF"), AllianceBg = Pal.Hex("#EAF1FC"), Horde = Pal.Hex("#B3261E"), HordeBg = Pal.Hex("#FCEDEC");
-        static readonly Color SharedC = Pal.Hex("#7A4CC2"), SharedBg = Pal.Hex("#F3EEFB"), SharedBorder = Pal.Hex("#DCCDF3");
+        static readonly Color Alliance = Pal.Hex("#8DB6FF"), AllianceBg = Pal.Hex("#1C2638"), Horde = Pal.Hex("#FF8A7A"), HordeBg = Pal.Hex("#3A1C18");
+        static readonly Color SharedC = Pal.Hex("#C7A6FF"), SharedBg = Pal.Hex("#2A2138"), SharedBorder = Pal.Hex("#4E3D6E");
 
         bool SharingOn { get { string v; return settings.TryGetValue("shareOn", out v) && v == "1"; } }
         string Nick { get { string v; return settings.TryGetValue("nick", out v) ? Profile.CleanNick(v) : ""; } }
@@ -281,7 +281,7 @@ namespace QGSCompanion
         void BuildPlayers()
         {
             playersList = new ListBox { Dock = DockStyle.Fill, BorderStyle = BorderStyle.None, DrawMode = DrawMode.OwnerDrawFixed, ItemHeight = S(58),
-                IntegralHeight = false, BackColor = Color.White, Visible = false, Font = fBody };
+                IntegralHeight = false, BackColor = Pal.Card, ForeColor = Pal.Text, Visible = false, Font = fBody };
             playersList.DrawItem += DrawPlayer;
             playersList.SelectedIndexChanged += (s, e) =>
             {
@@ -359,13 +359,13 @@ namespace QGSCompanion
         {
             switch (level)
             {
-                case 1: return Pal.Hex("#8A94A3");
-                case 2: return Pal.Hex("#2DA44E");
-                case 3: return Pal.Hex("#1F7AB8");
-                case 4: return Pal.Hex("#6B4FBB");
-                case 5: return Pal.Hex("#C9971C");
-                case 6: return Pal.Hex("#C25E00");
-                default: return Pal.Hex("#B3261E");
+                case 1: return Pal.Hex("#A89C8A");
+                case 2: return Pal.Hex("#4CC764");
+                case 3: return Pal.Hex("#4FA3E0");
+                case 4: return Pal.Hex("#A08AF0");
+                case 5: return Pal.Gold;
+                case 6: return Pal.Hex("#E8893A");
+                default: return Pal.Hex("#F0645A");
             }
         }
 
@@ -373,7 +373,7 @@ namespace QGSCompanion
         {
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             using (var b = new SolidBrush(RankColor(rank.Level))) g.FillEllipse(b, r);
-            Draw.Text(g, rank.Level.ToString(CultureInfo.InvariantCulture), f, r, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            Draw.Text(g, rank.Level.ToString(CultureInfo.InvariantCulture), f, r, Pal.OnAccent, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
 
         void DrawPlayer(object sender, DrawItemEventArgs e)
@@ -382,7 +382,7 @@ namespace QGSCompanion
             var g = e.Graphics; var b = e.Bounds;
             var st = (PlayerStats)playersList.Items[e.Index];
             bool sel = (e.State & DrawItemState.Selected) != 0;
-            using (var bg = new SolidBrush(sel ? Pal.AccentBg : Color.White)) g.FillRectangle(bg, b);
+            using (var bg = new SolidBrush(sel ? Pal.AccentBg : Pal.Card)) g.FillRectangle(bg, b);
             if (sel) using (var bar = new SolidBrush(Pal.Accent)) g.FillRectangle(bar, b.X, b.Y, S(3), b.Height);
             using (var line = new Pen(Pal.Window)) g.DrawLine(line, b.X + S(12), b.Bottom - 1, b.Right - S(8), b.Bottom - 1);
             int x = b.X + S(12);
@@ -482,9 +482,9 @@ namespace QGSCompanion
                 bool ok = a.Earned(st);
                 var medal = new Rectangle(pad, y + S(1), S(18), S(18));
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                using (var mb = new SolidBrush(ok ? Pal.Hex("#C9971C") : Pal.Window)) g.FillEllipse(mb, medal);
-                using (var mp = new Pen(ok ? Pal.Hex("#9A7212") : Pal.CardBorder, 1.5f)) g.DrawEllipse(mp, medal);
-                if (ok) Draw.Icon(g, "check", new RectangleF(medal.X + S(3), medal.Y + S(3), S(12), S(12)), Color.White);
+                using (var mb = new SolidBrush(ok ? Pal.Gold : Pal.Window)) g.FillEllipse(mb, medal);
+                using (var mp = new Pen(ok ? Pal.GoldBorder : Pal.CardBorder, 1.5f)) g.DrawEllipse(mp, medal);
+                if (ok) Draw.Icon(g, "check", new RectangleF(medal.X + S(3), medal.Y + S(3), S(12), S(12)), Pal.OnAccent);
                 Draw.Text(g, a.Name, ok ? fBold : fBody, new Rectangle(pad + S(28), y, S(170), S(18)), ok ? Pal.Text : Pal.Sub, TextFormatFlags.Top);
                 string prog = ok ? "" : "  (" + a.Progress(st) + "/" + a.Target + ")";
                 Draw.Text(g, a.Text + prog, fSmall, new Rectangle(pad + S(200), y + S(1), w - S(200), S(18)), Pal.Sub, TextFormatFlags.Top);
@@ -504,8 +504,20 @@ namespace QGSCompanion
         // ------------------------------------------------------------------
         void ShowSharing()
         {
-            using (var f = new Form { Text = "Local sharing", FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
-                StartPosition = FormStartPosition.CenterParent, ClientSize = new Size(S(580), S(520)), BackColor = Color.White, Font = fBody, ShowInTaskbar = false })
+            using (var f = BuildSharingDialog())
+            {
+                dialogOwner = f;
+                try { f.ShowDialog(this); } finally { dialogOwner = null; }
+            }
+            if (view == "players") FillPlayers();
+            UpdateDetail();
+            header.Invalidate();
+        }
+
+        internal Form BuildSharingDialog()
+        {
+            var f = new Form { Text = "Local sharing", FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
+                StartPosition = FormStartPosition.CenterParent, ClientSize = new Size(S(580), S(520)), BackColor = Pal.Card, ForeColor = Pal.Text, Font = fBody, ShowInTaskbar = false };
             {
                 var title = new Label { Text = "Share with players on your network", Font = fBig, AutoSize = true, Location = new Point(S(24), S(16)) };
                 var intro = new Label { ForeColor = Pal.Sub, AutoSize = false, Location = new Point(S(24), S(50)), Size = new Size(S(532), S(52)),
@@ -520,7 +532,7 @@ namespace QGSCompanion
                 show.CheckedChanged += (s, e) => codeB.UseSystemPasswordChar = !show.Checked;
                 var note = new Label { ForeColor = Pal.Sub, AutoSize = false, Location = new Point(S(24), S(206)), Size = new Size(S(532), S(46)),
                     Text = "Only apps with the same code can join or send you chains. Windows may ask to let this app through its firewall the first time: allow it for private networks." };
-                var err = new Label { ForeColor = Pal.Hex("#B42318"), AutoSize = false, Location = new Point(S(24), S(252)), Size = new Size(S(532), S(18)) };
+                var err = new Label { ForeColor = Pal.Error, AutoSize = false, Location = new Point(S(24), S(252)), Size = new Size(S(532), S(18)) };
                 var listL = new Label { Text = "Players", Font = fHead, AutoSize = true, Location = new Point(S(24), S(274)) };
                 var lv = new ListView { View = View.Details, FullRowSelect = true, HideSelection = false, Location = new Point(S(24), S(300)),
                     Size = new Size(S(532), S(160)), BorderStyle = BorderStyle.FixedSingle };
@@ -585,12 +597,9 @@ namespace QGSCompanion
                 };
                 f.AcceptButton = save; f.CancelButton = cancel;
                 f.Controls.AddRange(new Control[] { title, intro, on, nickL, nickB, codeL, codeB, show, note, err, listL, lv, forget, sync, unforget, save, cancel });
-                dialogOwner = f;
-                try { f.ShowDialog(this); } finally { dialogOwner = null; }
+                Theme.Form(f);
             }
-            if (view == "players") FillPlayers();
-            UpdateDetail();
-            header.Invalidate();
+            return f;
         }
 
         string SharingPillText(out bool on)

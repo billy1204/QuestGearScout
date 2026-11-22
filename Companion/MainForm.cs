@@ -104,12 +104,15 @@ namespace QGSCompanion
             fSmall = new Font("Segoe UI", 8.25f);
             fSmallBold = new Font("Segoe UI Semibold", 8.25f);
             fHead = new Font("Segoe UI Semibold", 11f);
-            fTitle = new Font("Segoe UI Semibold", 12f);
-            fBig = new Font("Segoe UI Semibold", 15f);
+            fTitle = new Font("Palatino Linotype", 12.5f, FontStyle.Bold);
+            fBig = new Font("Palatino Linotype", 15f, FontStyle.Bold);
             fMono = new Font("Consolas", 8.5f);
             Font = fBody;
             warnIcon = Draw.IconBitmap("warn", (int)Math.Round(14 * scale), Pal.Warn);
             BackColor = Pal.Window;
+            ForeColor = Pal.Text;
+            Theme.DarkTitle(this);
+            Theme.Tip(tips);
             Size = new Size(S(1040), S(680));
             MinimumSize = new Size(S(900), S(460));
             StartPosition = FormStartPosition.CenterScreen;
@@ -134,6 +137,10 @@ namespace QGSCompanion
             Controls.Add(firstRun);
             Controls.Add(header);
             Controls.Add(strip);
+            Theme.Tree(this);
+            Theme.Strip(rowMenu);
+            Theme.Strip(publishMenu);
+            Theme.Strip(filtersMenu);
 
             debounce = new System.Windows.Forms.Timer { Interval = 1200 };
             debounce.Tick += (s, e) => { debounce.Stop(); Reload(); };
@@ -168,14 +175,14 @@ namespace QGSCompanion
         // ======================================================================
         void BuildHeader()
         {
-            header = new BufferedPanel { Dock = DockStyle.Top, Height = S(48), BackColor = Color.White };
+            header = new BufferedPanel { Dock = DockStyle.Top, Height = S(48), BackColor = Pal.FooterBg };
             header.Paint += (s, e) =>
             {
                 var g = e.Graphics;
-                using (var p = new Pen(Pal.CardBorder)) g.DrawLine(p, 0, header.Height - 1, header.Width, header.Height - 1);
+                using (var p = new Pen(Pal.Trim, Math.Max(1, S(2)))) g.DrawLine(p, 0, header.Height - S(1), header.Width, header.Height - S(1));
                 Draw.Icon(g, "compass", new RectangleF(S(16), S(12), S(24), S(24)), Pal.Accent);
                 int x = S(48);
-                Draw.Text(g, "QuestGearScout Companion", fTitle, new Rectangle(x, 0, S(260), header.Height), Pal.Text, TextFormatFlags.VerticalCenter);
+                Draw.Text(g, "QuestGearScout Companion", fTitle, new Rectangle(x, 0, S(300), header.Height), Pal.Trim, TextFormatFlags.VerticalCenter);
                 x += Draw.Width(g, "QuestGearScout Companion", fTitle) + S(12);
                 int maxX = (accountBox.Visible ? accountBox.Left : folderBtn.Left) - S(12);
 
@@ -202,7 +209,7 @@ namespace QGSCompanion
                 if (maxX - x >= sw)
                 {
                     var sr = new Rectangle(x, S(12), sw, S(24));
-                    Draw.Card(g, sr, shareOn ? SharedBg : Color.White, shareOn ? SharedBorder : Pal.CardBorder, sr.Height / 2f);
+                    Draw.Card(g, sr, shareOn ? SharedBg : Pal.Card, shareOn ? SharedBorder : Pal.CardBorder, sr.Height / 2f);
                     using (var b = new SolidBrush(shareOn ? SharedC : Pal.Muted)) g.FillEllipse(b, sr.X + S(10), sr.Y + S(8), S(8), S(8));
                     Draw.Text(g, spill, fSmall, new Rectangle(sr.X + S(22), sr.Y, sw - S(26), sr.Height), shareOn ? SharedC : Pal.Sub, TextFormatFlags.VerticalCenter);
                     sharingPillRect = sr;
@@ -271,7 +278,7 @@ namespace QGSCompanion
                 fill = Pal.WarnBg; border = Pal.WarnBorder; fore = Pal.Warn; icon = "warn";
                 return "QuestGearScout v" + (check.Version == "" ? "?" : check.Version) + " - check";
             }
-            fill = Pal.Hex("#FEF3F2"); border = Pal.Hex("#FECDCA"); fore = Pal.Hex("#B42318"); icon = "warn";
+            fill = Pal.ErrorBg; border = Pal.ErrorBorder; fore = Pal.Error; icon = "warn";
             return check.MisplacedToc != null ? "QuestGearScout in the wrong folder" : "QuestGearScout not installed";
         }
 
@@ -434,9 +441,9 @@ namespace QGSCompanion
         void BuildToolbar()
         {
             toolbar = new BufferedPanel { Dock = DockStyle.Top, Height = S(40), BackColor = Pal.Window };
-            searchHost = new CardPanel { Size = new Size(S(200), S(28)), Radius = 5f, BackColor = Color.White };
+            searchHost = new CardPanel { Size = new Size(S(200), S(28)), Radius = 5f, BackColor = Pal.Input, Fill = Pal.Input, Border = Pal.InputBorder };
             searchHost.Paint += (s, e) => Draw.Icon(e.Graphics, "search", new RectangleF(S(8), S(7), S(14), S(14)), Pal.Muted);
-            searchBox = new TextBox { BorderStyle = BorderStyle.None, Font = fBody, Location = new Point(S(28), S(6)), Width = S(146), BackColor = Color.White };
+            searchBox = new TextBox { BorderStyle = BorderStyle.None, Font = fBody, Location = new Point(S(28), S(6)), Width = S(146), BackColor = Pal.Input, ForeColor = Pal.Text };
             searchBox.HandleCreated += (s, e) => SendMessage(searchBox.Handle, EM_SETCUEBANNER, (IntPtr)1, "Search chains");
             tips.SetToolTip(searchBox, "Search givers, zones, quests or items (Ctrl+F). Esc clears it.");
             searchBox.TextChanged += (s, e) => { clearSearch.Visible = searchBox.Text.Length > 0; searchTimer.Stop(); searchTimer.Start(); };
@@ -544,7 +551,7 @@ namespace QGSCompanion
 
             listCard = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(1) };
             nb = new ListBox { Dock = DockStyle.Fill, BorderStyle = BorderStyle.None, DrawMode = DrawMode.OwnerDrawVariable, SelectionMode = SelectionMode.MultiExtended,
-                IntegralHeight = false, BackColor = Color.White, Font = fBody };
+                IntegralHeight = false, BackColor = Pal.Card, ForeColor = Pal.Text, Font = fBody };
             nb.MeasureItem += (s, e) => { e.ItemHeight = nb.Items[e.Index] is GroupHeader ? S(28) : S(46); };
             nb.DrawItem += DrawNotebookItem;
             nb.SelectedIndexChanged += (s, e) => OnSelectionChanged();
@@ -563,10 +570,11 @@ namespace QGSCompanion
                 var col = table.Columns.Add(ColumnNames[i], S(ColumnWidths[i]));
                 if (i == 5) col.TextAlign = HorizontalAlignment.Right;
             }
+            Theme.DarkList(table, Pal.Card);
             table.ColumnClick += (s, e) => SortBy(e.Column);
             table.SelectedIndexChanged += (s, e) => OnSelectionChanged();
             table.KeyDown += OnListKey;
-            emptyLink = new LinkLabel { AutoSize = false, TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.White, ForeColor = Pal.Sub,
+            emptyLink = new LinkLabel { AutoSize = false, TextAlign = ContentAlignment.MiddleCenter, BackColor = Pal.Card, ForeColor = Pal.Sub,
                 Font = new Font("Segoe UI", 10f), Visible = false, LinkColor = Pal.Accent, ActiveLinkColor = Pal.Accent };
             emptyLink.LinkClicked += (s, e) => { if (emptyReason == "search") searchBox.Clear(); else { filter = "all"; UpdatePills(); Fill(); SaveSettings(); } };
             listCard.Controls.Add(emptyLink);
@@ -576,7 +584,7 @@ namespace QGSCompanion
             split.Panel1.Controls.Add(listCard);
 
             detailCard = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(1) };
-            detail = new ScrollPanel { Dock = DockStyle.Fill, BackColor = Color.White, AutoScroll = true };
+            detail = new ScrollPanel { Dock = DockStyle.Fill, BackColor = Pal.Card, ForeColor = Pal.Text, AutoScroll = true };
             detail.Paint += PaintDetail;
             detail.MouseClick += DetailClick;
             detail.Scroll += (s, e) => detail.Invalidate();
@@ -637,7 +645,8 @@ namespace QGSCompanion
 
         void BuildStatus()
         {
-            strip = new StatusStrip { SizingGrip = true, BackColor = Color.White, RenderMode = ToolStripRenderMode.System, ShowItemToolTips = true, Font = fSmall };
+            strip = new StatusStrip { SizingGrip = true, BackColor = Pal.FooterBg, ShowItemToolTips = true, Font = fSmall };
+            Theme.Strip(strip);
             lblLeft = new ToolStripStatusLabel { ForeColor = Pal.Sub };
             lblLeft.Click += (s, e) => { if (lblLeft.IsLink) Run("Addon check", () => ShowChecker(true)); };
             lblMsg = new ToolStripStatusLabel { Spring = true, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Pal.Text, ImageAlign = ContentAlignment.MiddleLeft };
@@ -710,7 +719,7 @@ namespace QGSCompanion
             var bmp = new Bitmap(32, 32);
             using (var g = Graphics.FromImage(bmp))
             {
-                Draw.Card(g, new RectangleF(1, 1, 30, 30), Color.White, Pal.CardBorder, 7f);
+                Draw.Card(g, new RectangleF(1, 1, 30, 30), Pal.FooterBg, Pal.Trim, 7f);
                 Draw.Icon(g, "compass", new RectangleF(3, 3, 26, 26), Pal.Accent);
             }
             return Icon.FromHandle(bmp.GetHicon());
@@ -791,7 +800,7 @@ namespace QGSCompanion
         void ShowFolderDialog()
         {
             using (var f = new Form { Text = "Game folder", FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
-                StartPosition = FormStartPosition.CenterParent, ClientSize = new Size(S(520), S(190)), BackColor = Color.White, Font = fBody, ShowInTaskbar = false })
+                StartPosition = FormStartPosition.CenterParent, ClientSize = new Size(S(520), S(190)), BackColor = Pal.Card, Font = fBody, ShowInTaskbar = false })
             {
                 var title = new Label { Text = "World of Warcraft: Forever folder", Font = fHead, AutoSize = true, Location = new Point(S(20), S(16)) };
                 var help = new Label { Text = "The folder named _forever_. Interface, AddOns or WTF inside it work too.", ForeColor = Pal.Sub, AutoSize = true, Location = new Point(S(20), S(42)) };
@@ -814,6 +823,7 @@ namespace QGSCompanion
                 cancel.Click += (s, e) => { f.DialogResult = DialogResult.Cancel; f.Close(); };
                 f.Controls.AddRange(new Control[] { title, help, box, browse, refresh, ok, cancel });
                 f.AcceptButton = ok; f.CancelButton = cancel;
+                Theme.Form(f);
                 var res = f.ShowDialog(this);
                 if (res == DialogResult.OK) ApplyGameDir(box.Text);
                 else if (res == DialogResult.Retry) RefreshAll();
@@ -940,7 +950,7 @@ namespace QGSCompanion
                 for (int i = 0; i < p.Length && i < table.Columns.Count; i++)
                 {
                     int w;
-                    if (int.TryParse(p[i], out w) && w >= 20 && w <= 1000) table.Columns[i].Width = S(w);
+                    if (int.TryParse(p[i], out w) && w >= 20 && w <= 1000) Theme.SetDesignedWidth(table.Columns[i], S(w));
                 }
             }
         }
@@ -951,7 +961,7 @@ namespace QGSCompanion
             settings["bounds"] = b.X + "," + b.Y + "," + b.Width + "," + b.Height;
             settings["max"] = WindowState == FormWindowState.Maximized ? "1" : "0";
             settings["cols"] = string.Join(",", table.Columns.Cast<ColumnHeader>()
-                .Select(c => ((int)Math.Round(c.Width / scale)).ToString(CultureInfo.InvariantCulture)).ToArray());
+                .Select(c => ((int)Math.Round(Theme.DesignedWidth(c) / scale)).ToString(CultureInfo.InvariantCulture)).ToArray());
             if (!uiTest) SaveSettings();
             poll.Stop(); debounce.Stop(); searchTimer.Stop(); freshTimer.Stop();
             StopSharing();
@@ -1095,7 +1105,7 @@ namespace QGSCompanion
             if (setupStep == 1 || setupStep == 2)
             {
                 lblLeft.Text = setupStep == 1 ? "Game folder not found. Check..." : "Addon not installed in this folder. Check...";
-                lblLeft.IsLink = true; lblLeft.LinkColor = Pal.Warn; lblLeft.Image = warnIcon;
+                lblLeft.IsLink = true; lblLeft.LinkColor = lblLeft.ActiveLinkColor = lblLeft.VisitedLinkColor = Pal.Warn; lblLeft.Image = warnIcon;
             }
             else
             {
@@ -1390,22 +1400,22 @@ namespace QGSCompanion
             var head = it as GroupHeader;
             if (head != null)
             {
-                g.FillRectangle(Brushes.White, b);
-                Draw.Text(g, head.Text, fSmallBold, new Rectangle(b.X + S(12), b.Y + S(10), b.Width - S(24), S(16)), head.IsNew ? Pal.Accent : Pal.Sub, TextFormatFlags.Top);
+                using (var hb = new SolidBrush(Pal.Card)) g.FillRectangle(hb, b);
+                Draw.Text(g, head.Text, fSmallBold, new Rectangle(b.X + S(12), b.Y + S(10), b.Width - S(24), S(16)), head.IsNew ? Pal.Accent : Pal.Trim, TextFormatFlags.Top);
                 return;
             }
             var r = (ChainRow)it;
             bool sel = (e.State & DrawItemState.Selected) != 0;
-            using (var bg = new SolidBrush(sel ? Pal.AccentBg : appeared.Contains(r.Key) ? Pal.Fresh : Color.White)) g.FillRectangle(bg, b);
+            using (var bg = new SolidBrush(sel ? Pal.AccentBg : appeared.Contains(r.Key) ? Pal.Fresh : Pal.Card)) g.FillRectangle(bg, b);
             if (sel) using (var bar = new SolidBrush(Pal.Accent)) g.FillRectangle(bar, b.X, b.Y, S(3), b.Height);
-            using (var line = new Pen(Pal.Window)) g.DrawLine(line, b.X + S(12), b.Bottom - 1, b.Right - S(8), b.Bottom - 1);
+            using (var line = new Pen(Pal.CardBorder)) g.DrawLine(line, b.X + S(12), b.Bottom - 1, b.Right - S(8), b.Bottom - 1);
 
             int x = b.X + S(14), right = b.Right - S(10);
             int tagW;
             var tagAt = new Point(right, b.Y + S(6));
-            if (r.Status == ChainRow.New) tagW = Draw.Pill(g, "New", fSmallBold, tagAt, Pal.Accent, Pal.Accent, Color.White, S(8), S(18), true);
+            if (r.Status == ChainRow.New) tagW = Draw.Pill(g, "New", fSmallBold, tagAt, Pal.Accent, Pal.Accent, Pal.OnAccent, S(8), S(18), true);
             else if (r.Status == ChainRow.InDiscoveries) tagW = Draw.Pill(g, "Added by you", fSmall, tagAt, Pal.AddedBg, Pal.AddedBorder, Pal.Added, S(8), S(18), true);
-            else if (r.Status == ChainRow.Unknown) tagW = Draw.Pill(g, "Can't check", fSmall, tagAt, Color.White, Pal.CardBorder, Pal.Sub, S(8), S(18), true);
+            else if (r.Status == ChainRow.Unknown) tagW = Draw.Pill(g, "Can't check", fSmall, tagAt, Pal.Card, Pal.CardBorder, Pal.Sub, S(8), S(18), true);
             else if (r.Status == ChainRow.Shared) tagW = Draw.Pill(g, "From " + r.From, fSmall, tagAt, SharedBg, SharedBorder, SharedC, S(8), S(18), true);
             else { Draw.Icon(g, "check", new RectangleF(right - S(14), b.Y + S(8), S(14), S(14)), Pal.Muted); tagW = S(14); }
 
@@ -1586,7 +1596,7 @@ namespace QGSCompanion
             }
             else
             {
-                bState = "nothing"; bIcon = "map"; bFill = Color.White; bBorder = Pal.CardBorder; bTint = Pal.Sub;
+                bState = "nothing"; bIcon = "map"; bFill = Pal.Card; bBorder = Pal.CardBorder; bTint = Pal.Sub;
                 bHead = "Nothing new yet";
                 bBody = "Play as usual. When you log out or type /reload, new finds show up here by themselves.";
                 SetBannerButtons(null, rows.Count > 0 ? "Share all " + rows.Count + " chains" : null);
@@ -1839,11 +1849,11 @@ namespace QGSCompanion
             g.TranslateTransform(detail.AutoScrollPosition.X, detail.AutoScrollPosition.Y);
             int y = pad;
             int px = pad;
-            if (row.Status == ChainRow.New) px += Draw.Pill(g, "New", fSmallBold, new Point(px, y), Pal.Accent, Pal.Accent, Color.White, S(8), S(20), false);
+            if (row.Status == ChainRow.New) px += Draw.Pill(g, "New", fSmallBold, new Point(px, y), Pal.Accent, Pal.Accent, Pal.OnAccent, S(8), S(20), false);
             else if (row.Status == ChainRow.InDiscoveries) px += Draw.Pill(g, "Added by you", fSmall, new Point(px, y), Pal.AddedBg, Pal.AddedBorder, Pal.Added, S(8), S(20), false);
-            else if (row.Status == ChainRow.BuiltIn) px += Draw.Pill(g, "\u2713 In the addon", fSmall, new Point(px, y), Color.White, Pal.CardBorder, Pal.Sub, S(8), S(20), false);
+            else if (row.Status == ChainRow.BuiltIn) px += Draw.Pill(g, "\u2713 In the addon", fSmall, new Point(px, y), Pal.Card, Pal.CardBorder, Pal.Sub, S(8), S(20), false);
             else if (row.Status == ChainRow.Shared) px += Draw.Pill(g, "From " + row.From, fSmall, new Point(px, y), SharedBg, SharedBorder, SharedC, S(8), S(20), false);
-            else px += Draw.Pill(g, "Can't check", fSmall, new Point(px, y), Color.White, Pal.CardBorder, Pal.Sub, S(8), S(20), false);
+            else px += Draw.Pill(g, "Can't check", fSmall, new Point(px, y), Pal.Card, Pal.CardBorder, Pal.Sub, S(8), S(20), false);
             px += S(6);
             int fw = DrawFaction(g, row.Faction, px, y, S(20), fSmall);
             if (fw > 0) px += fw;
@@ -1874,9 +1884,9 @@ namespace QGSCompanion
             }
             else
             {
-                Draw.Card(g, card, Color.White, Pal.CardBorder, 6f);
+                Draw.Card(g, card, Pal.Window, Pal.CardBorder, 6f);
                 var sq = new Rectangle(card.X + S(10), card.Y + S(9), S(40), S(40));
-                Draw.Card(g, sq, Color.White, rc, 5f);
+                Draw.Card(g, sq, Pal.Card, rc, 5f);
                 using (var p2 = new Pen(rc, 2f)) g.DrawRectangle(p2, sq.X + 1, sq.Y + 1, sq.Width - 3, sq.Height - 3);
                 Draw.Icon(g, "sword", new RectangleF(sq.X + S(8), sq.Y + S(8), S(24), S(24)), rc);
                 Draw.Text(g, Reward(row), fBold, new Rectangle(card.X + S(60), card.Y + S(10), card.Width - S(68), S(18)), rc, TextFormatFlags.Top);
@@ -1897,11 +1907,11 @@ namespace QGSCompanion
                 if (i < steps.Count - 1) using (var lp = new Pen(Pal.CardBorder, S(2))) g.DrawLine(lp, cx, y + S(22), cx, y + rowH);
                 var circ = new Rectangle(pad, y, S(22), S(22));
                 if (sp.Num == "...")
-                    using (var dp = new Pen(Pal.Muted, 1.5f) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dot }) { g.FillEllipse(Brushes.White, circ); g.DrawEllipse(dp, circ); }
+                    using (var dp = new Pen(Pal.Muted, 1.5f) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dot }) { using (var eb = new SolidBrush(Pal.Card)) g.FillEllipse(eb, circ); g.DrawEllipse(dp, circ); }
                 else
                 {
                     using (var cb = new SolidBrush(sp.Color)) g.FillEllipse(cb, circ);
-                    Draw.Text(g, sp.Num, fSmallBold, circ, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                    Draw.Text(g, sp.Num, fSmallBold, circ, Pal.OnAccent, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                 }
                 Draw.Text(g, sp.Title, sp.Sub == "" ? fBody : fBold, new Rectangle(pad + S(34), y + S(2), w - S(34), S(18)), sp.Sub == "" ? Pal.Sub : Pal.Text, TextFormatFlags.Top);
                 if (sp.Sub != "") Draw.Text(g, sp.Sub, fBody, new Rectangle(pad + S(34), y + S(20), w - S(34), S(18)), Pal.Sub, TextFormatFlags.Top);
@@ -1916,7 +1926,7 @@ namespace QGSCompanion
             {
                 string ids = (st.Get("kind") == "O" ? "Object " : "NPC ") + st.Get("id") + "   First quest ID " + (RootId(row) ?? "?") + "   Key " + st.Key;
                 var box = new Rectangle(pad, y, Math.Min(w, S(460)), S(26));
-                Draw.Card(g, box, Pal.FooterBg, Pal.CardBorder, 4f);
+                Draw.Card(g, box, Pal.Input, Pal.InputBorder, 4f);
                 Draw.Text(g, ids, fMono, new Rectangle(box.X + S(8), box.Y, box.Width - S(16), box.Height), Pal.Text, TextFormatFlags.VerticalCenter);
                 y = box.Bottom + S(4);
                 linkCopyIds = new Rectangle(pad, y, Draw.Width(g, "Copy quest IDs", fSmall), S(16));
@@ -2043,7 +2053,7 @@ namespace QGSCompanion
             try { a(); }
             catch (Exception ex)
             {
-                MessageBox.Show(this, what + " didn't work.\n\n" + Friendly(ex) + "\n\nDetails: " + ex.Message,
+                Theme.Box(this, what + " didn't work.\n\n" + Friendly(ex) + "\n\nDetails: " + ex.Message,
                     "QuestGearScout Companion", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Msg(what + " didn't work: " + ex.Message, true);
             }
@@ -2074,14 +2084,14 @@ namespace QGSCompanion
         bool Confirm(string body)
         {
             if (uiTest) { testConfirms.Add(body.Replace("\n", " / ")); return true; }
-            return MessageBox.Show(DialogParent, body, Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Question) == DialogResult.OK;
+            return Theme.Box(DialogParent, body, Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Question) == DialogResult.OK;
         }
         internal List<string> testConfirms = new List<string>();
 
         bool AddonReady()
         {
             if (addon.Found) return true;
-            MessageBox.Show(DialogParent, "QuestGearScout isn't installed in this folder:\n" + AddonDir + "\n\nUse Folder... to pick the right one.", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            Theme.Box(DialogParent, "QuestGearScout isn't installed in this folder:\n" + AddonDir + "\n\nUse Folder... to pick the right one.", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return false;
         }
 
@@ -2265,7 +2275,7 @@ namespace QGSCompanion
         internal Form BuildPublishDialog()
         {
             var f = new Form { Text = "Publish a new version", FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
-                StartPosition = FormStartPosition.CenterParent, ClientSize = new Size(S(560), S(380)), BackColor = Color.White, Font = fBody, ShowInTaskbar = false };
+                StartPosition = FormStartPosition.CenterParent, ClientSize = new Size(S(560), S(380)), BackColor = Pal.Card, Font = fBody, ShowInTaskbar = false };
             var title = new Label { Text = "Publish a new version", Font = fBig, AutoSize = true, Location = new Point(S(24), S(18)) };
             var intro = new Label { Text = "Three steps to get your finds to everyone who uses the addon.", ForeColor = Pal.Sub, AutoSize = true, Location = new Point(S(24), S(52)) };
             f.Controls.Add(title); f.Controls.Add(intro);
@@ -2280,14 +2290,14 @@ namespace QGSCompanion
             {
                 int y = S(88) + i * S(76);
                 int idx = i;
-                circles[i] = new BufferedPanel { Location = new Point(S(24), y), Size = new Size(S(28), S(28)), BackColor = Color.White };
+                circles[i] = new BufferedPanel { Location = new Point(S(24), y), Size = new Size(S(28), S(28)), BackColor = Pal.Card };
                 circles[i].Paint += (s, e) =>
                 {
                     var g = e.Graphics;
                     g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                     using (var b = new SolidBrush(done[idx] ? Pal.Success : Pal.Accent)) g.FillEllipse(b, 0, 0, S(27), S(27));
-                    if (done[idx]) Draw.Icon(g, "check", new RectangleF(S(6), S(6), S(16), S(16)), Color.White);
-                    else Draw.Text(g, (idx + 1).ToString(CultureInfo.InvariantCulture), fBold, new Rectangle(0, 0, S(28), S(28)), Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                    if (done[idx]) Draw.Icon(g, "check", new RectangleF(S(6), S(6), S(16), S(16)), Pal.OnAccent);
+                    else Draw.Text(g, (idx + 1).ToString(CultureInfo.InvariantCulture), fBold, new Rectangle(0, 0, S(28), S(28)), Pal.OnAccent, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                 };
                 heads[i] = new Label { Font = fHead, AutoSize = true, Location = new Point(S(64), y) };
                 subs[i] = new Label { ForeColor = Pal.Sub, AutoSize = false, Location = new Point(S(64), y + S(24)), Size = new Size(S(290), S(36)) };
@@ -2306,6 +2316,7 @@ namespace QGSCompanion
             saveLink.LinkClicked += (s, e) => Run("Save share file", () => SaveRows(rows.ToList()));
             f.Controls.AddRange(new Control[] { foot, copyLink, saveLink, close });
             f.CancelButton = close;
+            Theme.Form(f);
 
             Action refresh = () =>
             {
@@ -2338,7 +2349,7 @@ namespace QGSCompanion
             btns[1].Click += (s, e) => Run("Bump version", () =>
             {
                 string nv = AddonData.BumpVersion(AddonDir);
-                if (nv == null) { MessageBox.Show(f, "Couldn't find a '## Version:' line ending in a number in QuestGearScout.toc. Edit it by hand.", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+                if (nv == null) { Theme.Box(f, "Couldn't find a '## Version:' line ending in a number in QuestGearScout.toc. Edit it by hand.", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
                 Reload(); Msg("Version bumped to " + nv + ".", false); refresh();
             });
             btns[2].Click += (s, e) => Run("Build zip", () => { if (ZipNow(f)) f.Close(); });
@@ -2378,7 +2389,7 @@ namespace QGSCompanion
                 string root = Path.GetFullPath(AddonDir).TrimEnd('\\') + "\\";
                 if (full.StartsWith(root, StringComparison.OrdinalIgnoreCase))
                 {
-                    MessageBox.Show(owner, "Save the zip outside the addon folder, or it would include itself.", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    Theme.Box(owner, "Save the zip outside the addon folder, or it would include itself.", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return false;
                 }
                 if (File.Exists(full)) File.Delete(full);
@@ -2390,7 +2401,7 @@ namespace QGSCompanion
                 SaveSettings();
                 UpdateBanner();
                 Msg("Built " + Path.GetFileName(full) + " (" + count + " files).", false);
-                if (MessageBox.Show(owner, "Built " + Path.GetFileName(full) + " (" + count + " files).\n\nUpload it on CurseForge: your project > Files > Upload File.\n\nOpen the folder?",
+                if (Theme.Box(owner, "Built " + Path.GetFileName(full) + " (" + count + " files).\n\nUpload it on CurseForge: your project > Files > Upload File.\n\nOpen the folder?",
                         Text, MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
                     Process.Start("explorer.exe", "/select,\"" + full + "\"");
                 return true;
@@ -2492,6 +2503,17 @@ namespace QGSCompanion
                     using (var bmp = new Bitmap(f.Width, f.Height)) { f.DrawToBitmap(bmp, new Rectangle(0, 0, f.Width, f.Height)); bmp.Save(shotPath, System.Drawing.Imaging.ImageFormat.Png); }
                 }
                 return f.TestText();
+            }
+        }
+        // Shows a dialog off-screen and saves a picture of it (for the --uitest screenshots).
+        internal void TestDialogShot(Form f, string shotPath)
+        {
+            using (f)
+            {
+                f.StartPosition = FormStartPosition.Manual; f.Location = new Point(-20000, -20000);
+                f.Show(); Application.DoEvents();
+                using (var bmp = new Bitmap(f.Width, f.Height)) { f.DrawToBitmap(bmp, new Rectangle(0, 0, f.Width, f.Height)); bmp.Save(shotPath, System.Drawing.Imaging.ImageFormat.Png); }
+                f.Close();
             }
         }
         void PaintDetailNow()
@@ -2724,6 +2746,10 @@ namespace QGSCompanion
             Shot(f, Path.Combine(shots, "shot-11-shared.png"));
             log.Append("== players view\n").Append(f.TestPlayers());
             Shot(f, Path.Combine(shots, "shot-12-players.png"));
+            f.TestDialogShot(f.BuildSharingDialog(), Path.Combine(shots, "shot-13-sharing.png"));
+            f.TestDialogShot(f.BuildPublishDialog(), Path.Combine(shots, "shot-14-publish.png"));
+            f.TestDialogShot(Theme.BuildBox("Built QuestGearScout-1.9.1.zip (11 files).\n\nUpload it on CurseForge: your project > Files > Upload File.\n\nOpen the folder?",
+                "QuestGearScout Companion", MessageBoxButtons.YesNo, MessageBoxIcon.Information), Path.Combine(shots, "shot-15-message.png"));
             f.TestView("notebook");
             f.TestFaction("H"); Application.DoEvents();
             log.Append("== faction filter: Horde only\n").Append(f.TestDump());
