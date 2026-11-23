@@ -645,5 +645,69 @@ QGS.Rebuild()
 check("Alliance sees only the neutral dungeon chain of that giver",
     QGS.starters["C:1280"] ~= nil and QGS.starters["C:1280"].dungeonSteps ~= nil and QGS.starters["C:1280"].quality == nil)
 
+io.write("/qgs check\n")
+clearChat()
+local okc, errc = pcall(SlashCmdList.QUESTGEARSCOUT, "check")
+check("/qgs check runs without error", okc, errc)
+check("/qgs check shows the character's faction", chatHas("Character: Tester - Alliance"), chat[2])
+check("/qgs check shows how many quests are recorded", chatHas("Quests recorded:"), chat[3])
+check("/qgs check shows the last quest recorded", chatHas("Last quest recorded:"), chat[4])
+check("/qgs check says when it reaches the Companion", chatHas("log out or type /reload"))
+-- A game that gives no realm name: the character is saved under its name only.
+GetRealmName = function() return "" end
+QuestGearScoutDB.chars["Tester-"] = { faction = "A" }
+fire("PLAYER_LOGIN")
+check("no realm name: character saved as just its name (old 'Name-' entry tidied up)",
+    QuestGearScoutDB.chars["Tester"] ~= nil and QuestGearScoutDB.chars["Tester-"] == nil)
+GetRealmName = nil
+
+-- End-to-end: write QuestGearScoutDB the way the game writes SavedVariables, so the Companion app
+-- can be run on it (tests/e2e.ps1). Only when QGS_SAVE names the file to write.
+local savePath = os.getenv and os.getenv("QGS_SAVE")
+if savePath and savePath ~= "" then
+    local function q(s) return '"' .. s:gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n") .. '"' end
+    local function ser(v, indent, out)
+        local t = type(v)
+        if t == "table" then
+            out[#out + 1] = "{\n"
+            local keys = {}
+            for k in pairs(v) do keys[#keys + 1] = k end
+            table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+            for _, k in ipairs(keys) do
+                out[#out + 1] = indent .. "\t[" .. (type(k) == "number" and tostring(k) or q(tostring(k))) .. "] = "
+                ser(v[k], indent .. "\t", out)
+                out[#out + 1] = ",\n"
+            end
+            out[#out + 1] = indent .. "}"
+        elseif t == "string" then out[#out + 1] = q(v)
+        elseif t == "number" or t == "boolean" then out[#out + 1] = tostring(v)
+        else out[#out + 1] = "nil" end
+    end
+    QuestGearScoutDB.settings.minQuality, QuestGearScoutDB.settings.dungeons = 2, true
+    local out = { "\nQuestGearScoutDB = " }
+    ser(QuestGearScoutDB, "", out)
+    out[#out + 1] = "\n"
+    local fh = assert(io.open(savePath, "w")); fh:write(table.concat(out)); fh:close()
+    -- What the addon itself learned (every faction, as the Companion reads them all).
+    local learnedKeys, nQuests = {}, 0
+    for _ in pairs(QuestGearScoutDB.quests) do nQuests = nQuests + 1 end
+    for _, fac in ipairs({ "Alliance", "Horde" }) do
+        UnitFactionGroup = function() return fac end
+        QGS.Rebuild()
+        for key, s in pairs(QGS.starters) do
+            if QGS.sources[key] == "learned" then
+                if s.quality then learnedKeys[key .. "\tGear"] = true end
+                if s.dungeonSteps then learnedKeys[key .. "\tDungeon"] = true end
+            end
+        end
+    end
+    local list = {}
+    for k in pairs(learnedKeys) do list[#list + 1] = k end
+    table.sort(list)
+    local eh = assert(io.open(savePath .. ".expected", "w"))
+    eh:write("quests ", nQuests, "\n", table.concat(list, "\n"), "\n"); eh:close()
+    io.write("wrote ", savePath, " (", nQuests, " quests, ", #list, " learned chains)\n")
+end
+
 io.write(string.format("\n%d passed, %d failed\n", passed, failed))
 os.exit(failed == 0 and 0 or 1)

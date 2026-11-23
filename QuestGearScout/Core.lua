@@ -372,7 +372,11 @@ local LINK_SAME_WINDOW = 180  -- s: next quest from the same NPC/object
 
 local function questRecord(qid)
     local q = QuestGearScoutDB.quests[qid]
-    if not q then q = {}; QuestGearScoutDB.quests[qid] = q end
+    if not q then
+        q = {}; QuestGearScoutDB.quests[qid] = q
+        QGS.newThisSession = (QGS.newThisSession or 0) + 1
+    end
+    QGS.lastQuest = qid   -- for /qgs check
     return q
 end
 
@@ -423,7 +427,10 @@ local function noteCharacter()
     if not name or isSecret(name) or isSecret(realm) then return end
     local _, class = UnitClass("player")
     db.chars = db.chars or {}
-    db.chars[name .. "-" .. (realm or "?")] = {
+    -- "Name-Realm"; just "Name" where the game gives no realm name (older entries were "Name-").
+    local key = name
+    if realm and realm ~= "" then key = name .. "-" .. realm else db.chars[name .. "-"] = nil end
+    db.chars[key] = {
         faction = QGS.PlayerFaction(), class = (not isSecret(class)) and class or nil,
         level = UnitLevel and UnitLevel("player") or nil, seen = time and time() or nil,
     }

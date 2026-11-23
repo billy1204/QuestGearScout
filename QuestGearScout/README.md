@@ -59,6 +59,7 @@ Each alert shows in chat and as center-screen text, with a sound. It stays quiet
 | `/qgs` | Open or close the window |
 | `/qgs minimap` | Show or hide the minimap button |
 | `/qgs stats` | How many chains you've learned (`/qgs stats tell` posts it to group chat) |
+| `/qgs check` | Is the addon recording your quests? Shows your character's faction, how many quests are recorded (and how many this session), the last one, and a reminder that the Companion app sees them after you log out or `/reload` |
 | `/qgs chains` | Chains you're on now, with step X of N |
 | `/qgs tell` | Post your chain progress to party/raid chat |
 | `/qgs chain on\|off` | Turn chain-started notices on or off |

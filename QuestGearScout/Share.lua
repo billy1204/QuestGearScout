@@ -215,6 +215,33 @@ local function stats(post)
     print(string.format("  Quests seen: %d", count(QuestGearScoutDB.quests)))
 end
 
+-- /qgs check: is the addon recording this character's quests?
+local function check()
+    local db = QuestGearScoutDB
+    local f = QGS.PlayerFaction()
+    local name = UnitName and UnitName("player") or "?"
+    QGS.Print("check:")
+    print(string.format("  Character: %s - %s", tostring(name),
+        f == "A" and "Alliance" or f == "H" and "Horde" or "|cffff8040faction not known yet|r"))
+    local n, withFaction = 0, 0
+    for _, q in pairs(db.quests) do
+        n = n + 1
+        if q.faction then withFaction = withFaction + 1 end
+    end
+    print(string.format("  Quests recorded: |cff40ff40%d|r (%d new this session, %d with a faction)",
+        n, QGS.newThisSession or 0, withFaction))
+    local last = QGS.lastQuest and db.quests[QGS.lastQuest]
+    if last then
+        print(string.format("  Last quest recorded: %s (%d)%s", last.title or "?", QGS.lastQuest,
+            last.giver and (" from " .. (last.giver.name or "?")) or ""))
+    else
+        print("  No quest recorded this session yet: open a quest from an NPC, then type /qgs check again.")
+    end
+    local st = QGS.stats or {}
+    print(string.format("  Chains learned: %d (%d gear, %d dungeon known in all)", st.learned or 0, st.gear or 0, st.dungeon or 0))
+    print("  The game saves this to disk when you log out or type /reload. The Companion app reads it then.")
+end
+
 -- Chains you are on right now, with "step X of N".
 local function activeChains()
     local out = {}
@@ -297,6 +324,7 @@ local function help()
     QGS.Print("commands:")
     print("  /qgs - open the QuestGearScout window (/qgs minimap toggles its button)")
     print("  /qgs stats - how many chains you've learned (/qgs stats tell posts it to group)")
+    print("  /qgs check - is the addon recording your quests (and your faction)?")
     print("  /qgs chains - quest chains you're on, with step X of N")
     print("  /qgs tell - post your chain progress to party/raid chat")
     print("  /qgs chain on|off - chain started/next step notices (now " .. (st.chainNotify and "on" or "off") .. ")")
@@ -328,6 +356,8 @@ SlashCmdList.QUESTGEARSCOUT = function(msg)
         stats(rest == "tell")
     elseif cmd == "chains" then
         chains()
+    elseif cmd == "check" then
+        check()
     elseif cmd == "tell" then
         tell()
     elseif cmd == "chain" then

@@ -6,7 +6,7 @@ A World of Warcraft: Forever addon that alerts you near NPCs and objects that st
 |---|---|
 | [`QuestGearScout/`](QuestGearScout) | The addon (Lua). Copy this folder into `World of Warcraft\_forever_\Interface\AddOns`. See its [README](QuestGearScout/README.md). |
 | [`Companion/`](Companion) | **QuestGearScout Companion**, a Windows app (C#, WinForms) that shows what the addon learned, adds new finds to the addon, shares chains with friends on your home network, and builds the CurseForge zip. See its [README](Companion/README.md). |
-| [`tests/`](tests) | Addon tests, run with Lua 5.1: `lua5.1 tests/qgs_test.lua` (from this folder). |
+| [`tests/`](tests) | Addon tests, run with Lua 5.1: `lua5.1 tests/qgs_test.lua` (from this folder). `tests\e2e.ps1` checks the whole path: the addon records quests, saves them the way the game does, and the Companion app reads every one back. |
 | [`tools/`](tools) | `att_convert.lua`, which builds `QuestGearScout/Data.lua` from AllTheThings data. |
 
 ## Building the Companion app
