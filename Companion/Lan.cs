@@ -1,13 +1,18 @@
 // QuestGearScout Companion - sharing chains and stats with other players on the local network.
 //
 // How it works:
-//   * Every few seconds each app broadcasts a small UDP "beacon" on the local network:
-//       QGSC1|<group hash>|<player id>|<tcp port>|<data version>|<nickname>
-//     The group hash comes from the group code, so apps with a different code ignore each other.
+//   * Every few seconds each app broadcasts a small, signed UDP "beacon" on the local network:
+//       QGSC3|<group id>|<player id>|<tcp port>|<data version>|<time>|<nickname>|<sig>
+//     The group id and the signing key come from the group code through PBKDF2 (200,000 rounds),
+//     so guessing a code from what's heard on the network is very slow. Apps with a different
+//     code ignore each other. (QGSC2, before 1.10.2, used a fast hash: those apps are only
+//     noticed, so the user can be told to ask that player to update.)
 //   * When an app sees a beacon from the same group with a data version it hasn't got yet, it
 //     connects to that player's TCP port and asks for their profile: nickname, stats and the
-//     chains they learned themselves (with Horde/Alliance marked).
-//   * A group with a name also announces it ("QGSC2G|<group hash>|<player id>|<time>|<named at>|<name>|<sig>")
+//     chains they learned themselves (with Horde/Alliance marked). A player id stays with the
+//     computer it was first heard from, one computer can only bring a few ids, and every
+//     download and incoming connection has a time limit.
+//   * A group with a name also announces it ("QGSC3G|<group id>|<player id>|<time>|<named at>|<name>|<sig>")
 //     so players who aren't in a group yet can see it in the "Local group" sidebar. They still need
 //     the code to join: the app checks the code they type against the group's hash. Only members
 //     can check the signature; they take a newer signed name, so a rename reaches everyone.
@@ -47,20 +52,77 @@ namespace QGSCompanion
         public const int MaxPayload = 2 * 1024 * 1024;
         public const int MaxChains = 5000;
 
-        public static string GroupHash(string code)
+        // The group code goes through PBKDF2 with many rounds, so testing guesses against what's heard
+        // on the network (the group id in every beacon) is very slow. The id that's sent and the
+        // secret key both come from that one result; the key never goes over the network.
+        public const int KdfRounds = 200000;
+        static readonly Dictionary<string, byte[]> kdfCache = new Dictionary<string, byte[]>();
+
+        static string NormCode(string code) { return (code ?? "").Trim().ToLowerInvariant(); }
+
+        static byte[] Kdf(string code)
         {
-            using (var sha = SHA256.Create())
+            string c = NormCode(code);
+            lock (kdfCache)
             {
-                byte[] h = sha.ComputeHash(Encoding.UTF8.GetBytes("qgsc-group|" + (code ?? "").Trim().ToLowerInvariant()));
-                return string.Concat(h.Take(16).Select(b => b.ToString("x2")).ToArray());
+                byte[] b;
+                if (kdfCache.TryGetValue(c, out b)) return b;
+                using (var d = new Rfc2898DeriveBytes(Encoding.UTF8.GetBytes(c), Encoding.UTF8.GetBytes("qgsc3-group-code"), KdfRounds))
+                    b = d.GetBytes(20);
+                if (kdfCache.Count > 32) kdfCache.Clear();
+                kdfCache[c] = b;
+                return b;
             }
         }
 
-        // Secret key from the group code. It never goes over the network; it signs requests and replies.
-        public static byte[] GroupKey(string code)
+        static byte[] Sha(string label, byte[] data)
         {
             using (var sha = SHA256.Create())
-                return sha.ComputeHash(Encoding.UTF8.GetBytes("qgsc-key|" + (code ?? "").Trim().ToLowerInvariant()));
+                return sha.ComputeHash(Encoding.UTF8.GetBytes(label).Concat(data).ToArray());
+        }
+
+        public static string GroupHash(string code)
+        {
+            return string.Concat(Sha("qgsc3-id|", Kdf(code)).Take(16).Select(b => b.ToString("x2")).ToArray());
+        }
+
+        // Secret key from the group code. It never goes over the network; it signs requests and replies.
+        public static byte[] GroupKey(string code) { return Sha("qgsc3-key|", Kdf(code)); }
+
+        // The group id an app from before 1.10.2 sends for this code (a fast hash): only used to
+        // notice that a player in your group still has an older app, never sent.
+        public static string LegacyGroupHash(string code)
+        {
+            using (var sha = SHA256.Create())
+                return string.Concat(sha.ComputeHash(Encoding.UTF8.GetBytes("qgsc-group|" + NormCode(code))).Take(16).Select(b => b.ToString("x2")).ToArray());
+        }
+
+        // How easy a group code is to guess: null if it's fine, else what's wrong.
+        public static string WeakCode(string code)
+        {
+            string c = NormCode(code);
+            if (c.Length < 12) return "Use a longer code: at least 12 characters (a few words is easiest).";
+            if (c.Distinct().Count() < 6) return "Use a code with more different letters.";
+            return null;
+        }
+
+        // A code that's hard to guess: five random words and a number (about 40 bits), e.g. "amber-falcon-river-hollow-moss-27".
+        static readonly string[] CodeWords = {
+            "amber", "anvil", "arrow", "ash", "badger", "banner", "barrow", "beacon", "birch", "bramble", "bridge", "brook", "candle", "canyon",
+            "cedar", "cinder", "cliff", "clover", "cobalt", "comet", "copper", "coral", "crane", "crest", "crow", "dagger", "dawn", "delta",
+            "drum", "dune", "eagle", "ember", "falcon", "fern", "flint", "forge", "fox", "frost", "gale", "garnet", "glade", "granite",
+            "griffin", "grove", "harbor", "hawk", "hazel", "heron", "hollow", "horizon", "iron", "ivy", "jade", "juniper", "kestrel", "lantern",
+            "lark", "ledger", "lichen", "lily", "lynx", "maple", "marsh", "meadow", "mesa", "mist", "moon", "moss", "nettle", "oak",
+            "onyx", "orchid", "otter", "owl", "pebble", "pine", "plume", "quarry", "quartz", "raven", "reed", "ridge", "river", "rook",
+            "rowan", "saber", "sage", "shale", "shield", "silver", "slate", "sparrow", "spruce", "stag", "stone", "storm", "summit", "tallow",
+            "thistle", "thorn", "thunder", "timber", "torch", "tundra", "valley", "vale", "willow", "wolf", "wren", "yarrow", "zephyr" };
+
+        public static string SuggestCode()
+        {
+            var b = new byte[12];
+            using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(b);
+            var words = Enumerable.Range(0, 5).Select(i => CodeWords[((b[i * 2] << 8) | b[i * 2 + 1]) % CodeWords.Length]).ToArray();
+            return string.Join("-", words) + "-" + (10 + (((b[10] << 8) | b[11]) % 90)).ToString(CultureInfo.InvariantCulture);
         }
 
         public static string Sign(byte[] key, string text)
@@ -209,7 +271,17 @@ namespace QGSCompanion
     {
         public static string Dir { get { return Path.Combine(AppPaths.Root, "shared"); } }
 
-        // group: the hash of the group they were heard in ("" if unknown), kept next to it in <id>.grp.
+        // At most this many players are kept (the ones heard longest ago go first).
+        public const int MaxStored = 200;
+
+        // Stores a player's data as the app understood it (cleaned and rebuilt, so padding or junk in
+        // what they sent isn't kept). group: the group they were heard in, kept next to it in <id>.grp.
+        public static void Save(PeerData p, string group)
+        {
+            if (p == null) return;
+            Save(p.Id, Profile.Build(p.Id, p.Nick, p.Stats, p.Chains.Values), group);
+        }
+
         public static void Save(string id, string payload, string group)
         {
             if (!Profile.IsId(id)) return;
@@ -224,7 +296,8 @@ namespace QGSCompanion
             try
             {
                 if (!Directory.Exists(Dir)) return outp;
-                foreach (string f in Directory.GetFiles(Dir, "*.txt"))
+                // The most recently heard players only (a flood of made-up players can't slow startup).
+                foreach (string f in Directory.GetFiles(Dir, "*.txt").OrderByDescending(x => File.GetLastWriteTimeUtc(x)).Take(MaxStored))
                 {
                     try
                     {
@@ -364,6 +437,7 @@ namespace QGSCompanion
         public bool BroadcastBeacons = true;
 
         public readonly string Id, Group;   // Group is null for a listen-only engine
+        readonly string legacyGroup;        // what an app from before 1.10.2 sends for our code
         readonly byte[] key;
         string nick = "", payload = "", version = "", groupName = "";
         long groupNamedAt;
@@ -375,6 +449,19 @@ namespace QGSCompanion
         readonly Dictionary<string, DateTime> seen = new Dictionary<string, DateTime>();       // id -> last beacon
         readonly Dictionary<string, string> fetchedVersion = new Dictionary<string, string>(); // id -> version we have
         readonly HashSet<string> fetching = new HashSet<string>();
+        // Each player id stays with the computer (address) it's heard from, so a beacon copied and
+        // sent again from another machine is ignored while the real one is around; and one
+        // computer can only bring a few ids (no inventing thousands of players).
+        public const int MaxIdsPerAddress = 3;
+        readonly Dictionary<string, Tuple<string, DateTime>> idHome = new Dictionary<string, Tuple<string, DateTime>>();   // id -> (address its data came from, last heard there)
+        readonly Dictionary<string, DateTime> cooldown = new Dictionary<string, DateTime>();   // "id|address" whose fetch failed -> ignored until
+        readonly Dictionary<string, Dictionary<string, DateTime>> addressIds = new Dictionary<string, Dictionary<string, DateTime>>();
+        readonly HashSet<string> olderApps = new HashSet<string>();
+        int serving;   // incoming connections being answered right now (inside the lock)
+        readonly Dictionary<string, int> servingFrom = new Dictionary<string, int>();   // address -> how many of them
+        public const int MaxServing = 16, MaxServingPerAddress = 2;
+        // Time limits (shorter in tests): a whole download; proving you have the code; sending the data.
+        public int FetchSeconds = 30, AuthSeconds = 3, ServeSeconds = 25;
 
         // Raised on a background thread when a player's data arrives (raw payload, already parsed).
         public event Action<PeerData, string> PeerData;
@@ -386,10 +473,14 @@ namespace QGSCompanion
         // (unix time), signed with our own code). Only "signed" can be trusted; the rest is just
         // for showing which groups are nearby.
         public event Action<string, string, string, long, bool> GroupHeard;
+        // Raised (once per player) when someone in our group is heard with an app from before 1.10.2,
+        // which can't share with this one: (player id, nickname).
+        public event Action<string, string> OlderAppHeard;
 
         public LanShare(string id, string groupCode)
         {
             Id = id; Group = Profile.GroupHash(groupCode); key = Profile.GroupKey(groupCode);
+            legacyGroup = Profile.LegacyGroupHash(groupCode);
         }
 
         // Listen-only: hears which groups are on the network, sends nothing and shares nothing.
@@ -460,6 +551,8 @@ namespace QGSCompanion
 
         // Ask everyone again (e.g. after the user clicks Sync now).
         public void ForgetVersions() { lock (gate) fetchedVersion.Clear(); }
+        // A player's data was dropped (to make room): fetch it again next time they're heard.
+        public void ForgetVersion(string id) { lock (gate) fetchedVersion.Remove(id); }
 
         // When we last heard this player's beacon (local time), or DateTime.MinValue.
         public DateTime LastHeard(string id)
@@ -521,15 +614,15 @@ namespace QGSCompanion
                 string body, gname;
                 long gat;
                 lock (gate) { body = Group + "|" + Id + "|" + tcpPort + "|" + version + "|" + UnixNow() + "|" + nick; gname = groupName; gat = groupNamedAt; }
-                string msg = "QGSC2|" + body + "|" + Profile.Sign(key, "beacon|" + body);
+                string msg = "QGSC3|" + body + "|" + Profile.Sign(key, "beacon|" + body);
                 var packets = new List<byte[]> { Encoding.UTF8.GetBytes(msg) };
                 // The group's name, for players who aren't in it yet and for members who don't have
-                // the newest name: "QGSC2G|group|id|unix time|named at|name|signature".
-                // Older apps ignore it (it isn't a QGSC2 beacon).
+                // the newest name: "QGSC3G|group|id|unix time|named at|name|signature".
+                // Older apps ignore it.
                 if (gname != "")
                 {
                     string gbody = Group + "|" + Id + "|" + UnixNow() + "|" + gat + "|" + gname;
-                    packets.Add(Encoding.UTF8.GetBytes("QGSC2G|" + gbody + "|" + Profile.Sign(key, "group|" + gbody)));
+                    packets.Add(Encoding.UTF8.GetBytes("QGSC3G|" + gbody + "|" + Profile.Sign(key, "group|" + gbody)));
                 }
                 foreach (var t in Targets())
                     foreach (byte[] data in packets)
@@ -551,9 +644,19 @@ namespace QGSCompanion
                 catch (SocketException) { if (stopping) return; continue; }
                 if (data.Length > 700) continue;
                 string[] p = Encoding.UTF8.GetString(data).Split('|');
-                if (p.Length == 7 && p[0] == "QGSC2G") { HeardName(p); continue; }
-                // QGSC2|group|id|port|version|unix time|nick|signature
-                if (p.Length != 8 || p[0] != "QGSC2" || !Profile.IsId(p[1]) || !Profile.IsId(p[2]) || p[2] == Id) continue;
+                if (p.Length == 7 && p[0] == "QGSC3G") { HeardName(p); continue; }
+                // An app from before 1.10.2 in our group (it sends the old, fast group hash): it can't
+                // share with this one, so the user is told once to ask that player to update.
+                if (p.Length == 8 && p[0] == "QGSC2" && legacyGroup != null && p[1] == legacyGroup && Profile.IsId(p[2]) && p[2] != Id)
+                {
+                    bool first;
+                    lock (gate) first = olderApps.Count < 64 && olderApps.Add(p[2]);
+                    var ho = OlderAppHeard;
+                    if (first && ho != null) try { ho(p[2], Profile.CleanNick(p[6])); } catch { }
+                    continue;
+                }
+                // QGSC3|group|id|port|version|unix time|nick|signature
+                if (p.Length != 8 || p[0] != "QGSC3" || !Profile.IsId(p[1]) || !Profile.IsId(p[2]) || p[2] == Id) continue;
                 long when;
                 if (long.TryParse(p[5], out when) && Math.Abs(UnixNow() - when) <= 300) RaiseGroupHeard(p[1], p[2], null, 0, false);
                 if (p[1] != Group) continue;
@@ -570,9 +673,12 @@ namespace QGSCompanion
                 lock (gate)
                 {
                     if (ignored.Contains(peer)) continue;
+                    if (!FromHome(peer, from.Address.ToString())) continue;
                     seen[peer] = DateTime.UtcNow;
                     if (seen.Count > 500)   // never grows without bound
                         foreach (var old in seen.Where(kv => (DateTime.UtcNow - kv.Value).TotalMinutes > 10).Select(kv => kv.Key).ToList()) seen.Remove(old);
+                    if (fetchedVersion.Count > 1000)
+                        foreach (var old in fetchedVersion.Keys.Where(k => !seen.ContainsKey(k)).ToList()) fetchedVersion.Remove(old);
                     string have;
                     fetchedVersion.TryGetValue(peer, out have);
                     fetch = ver != "" && have != ver && !fetching.Contains(peer) && fetching.Count < 16;
@@ -588,13 +694,46 @@ namespace QGSCompanion
             }
         }
 
+        // (Call inside the lock.) Is this beacon for `peer` worth acting on from this address?
+        //  - A player's home is the address their data was last fetched from, signed (a beacon alone
+        //    proves nothing about where it came from: it can be copied). While the home is heard
+        //    (in the last minute), the same id from any other address is ignored.
+        //  - An address whose fetch for that id failed is ignored for that id for 2 minutes, so a
+        //    copied beacon can't keep winning the race against the real one.
+        //  - A new id is only accepted from an address that brought fewer than MaxIdsPerAddress ids
+        //    in the last hour.
+        bool FromHome(string peer, string addr)
+        {
+            var now = DateTime.UtcNow;
+            DateTime until;
+            if (cooldown.TryGetValue(peer + "|" + addr, out until) && now < until) return false;
+            Tuple<string, DateTime> home;
+            if (idHome.TryGetValue(peer, out home))
+            {
+                if (home.Item1 == addr) idHome[peer] = Tuple.Create(addr, now);
+                else if ((now - home.Item2).TotalSeconds < 60) return false;   // its own computer is around
+            }
+            Dictionary<string, DateTime> ids;
+            if (!addressIds.TryGetValue(addr, out ids)) addressIds[addr] = ids = new Dictionary<string, DateTime>();
+            foreach (var old in ids.Where(kv => (now - kv.Value).TotalHours > 1).Select(kv => kv.Key).ToList()) ids.Remove(old);
+            if (!ids.ContainsKey(peer) && ids.Count >= MaxIdsPerAddress) return false;
+            ids[peer] = now;
+            if (idHome.Count > 1000)
+                foreach (var old in idHome.Where(kv => (now - kv.Value.Item2).TotalHours > 1).Select(kv => kv.Key).ToList()) idHome.Remove(old);
+            if (addressIds.Count > 1000)
+                foreach (var old in addressIds.Where(kv => kv.Value.All(x => (now - x.Value).TotalHours > 1)).Select(kv => kv.Key).ToList()) addressIds.Remove(old);
+            if (cooldown.Count > 1000)
+                foreach (var old in cooldown.Where(kv => kv.Value < now).Select(kv => kv.Key).ToList()) cooldown.Remove(old);
+            return true;
+        }
+
         void RaiseGroupHeard(string group, string peer, string name, long namedAt, bool signed)
         {
             var h = GroupHeard;
             if (h != null) try { h(group, peer, name, namedAt, signed); } catch { }
         }
 
-        // "QGSC2G|group|id|unix time|named at|name|signature": a group announcing its name.
+        // "QGSC3G|group|id|unix time|named at|name|signature": a group announcing its name.
         void HeardName(string[] p)
         {
             if (!Profile.IsId(p[1]) || !Profile.IsId(p[2]) || p[2] == Id) return;
@@ -617,26 +756,30 @@ namespace QGSCompanion
         // ------------------------------------------------------------------
         void Fetch(string peer, IPAddress addr, int port, string ver)
         {
+            bool ok = false;
             try
             {
                 using (var c = new TcpClient())
+                // The whole exchange has a time limit: a sender trickling a byte every few seconds can't
+                // hold the download open (closing the connection makes the waiting read fail).
+                using (new System.Threading.Timer(_ => { try { c.Close(); } catch { } }, null, FetchSeconds * 1000, Timeout.Infinite))
                 {
                     var ar = c.BeginConnect(addr, port, null, null);
                     if (!ar.AsyncWaitHandle.WaitOne(3000)) throw new IOException("timed out connecting");
                     c.EndConnect(ar);
                     c.ReceiveTimeout = 5000; c.SendTimeout = 5000;
                     var s = c.GetStream();
-                    // 1. The other app speaks first with a fresh challenge: "QGSC2 HELLO <server nonce> <its id>".
+                    // 1. The other app speaks first with a fresh challenge: "QGSC3 HELLO <server nonce> <its id>".
                     string hello = ReadLine(s, 200);
                     string[] h1 = hello == null ? new string[0] : hello.Split(' ');
-                    if (h1.Length != 4 || h1[0] != "QGSC2" || h1[1] != "HELLO" || !Regex.IsMatch(h1[2], "^[0-9a-f]{32}$")) throw new IOException("not a QuestGearScout Companion");
+                    if (h1.Length != 4 || h1[0] != "QGSC3" || h1[1] != "HELLO" || !Regex.IsMatch(h1[2], "^[0-9a-f]{32}$")) throw new IOException("not a QuestGearScout Companion");
                     if (h1[3] != peer) throw new IOException("a different player answered");
                     // 2. We answer with our own nonce, signed over both nonces and its id: the request only
                     //    works on this one connection, so it can't be captured and replayed.
                     string sn = h1[2], cn = Nonce();
-                    byte[] req = Encoding.UTF8.GetBytes("QGSC2 GET " + cn + " " + Profile.Sign(key, "get|" + sn + "|" + cn + "|" + peer) + "\n");
+                    byte[] req = Encoding.UTF8.GetBytes("QGSC3 GET " + cn + " " + Profile.Sign(key, "get|" + sn + "|" + cn + "|" + peer) + "\n");
                     s.Write(req, 0, req.Length);
-                    // 3. Reply: "QGSC2 OK <signature>\n" + profile, signed over both nonces and the data,
+                    // 3. Reply: "QGSC3 OK <signature>\n" + profile, signed over both nonces and the data,
                     //    so someone without the code can't send us chains.
                     var ms = new MemoryStream();
                     var buf = new byte[16384];
@@ -648,7 +791,7 @@ namespace QGSCompanion
                     }
                     string all = Encoding.UTF8.GetString(ms.ToArray());
                     int nl = all.IndexOf('\n');
-                    if (nl < 0 || !all.StartsWith("QGSC2 OK ")) throw new IOException("the other app refused (different group code?)");
+                    if (nl < 0 || !all.StartsWith("QGSC3 OK ")) throw new IOException("the other app refused (different group code?)");
                     string sig = all.Substring(9, nl - 9).Trim();
                     string text = all.Substring(nl + 1);
                     if (!Profile.SameSig(sig, Profile.Sign(key, "resp|" + sn + "|" + cn + "|" + text))) throw new IOException("the data wasn't signed with your group code");
@@ -660,13 +803,28 @@ namespace QGSCompanion
                     {
                         if (ignored.Contains(peer)) return;   // forgotten while we were fetching
                         fetchedVersion[peer] = ver;
+                        // Signed data came from here: this is the player's computer now.
+                        idHome[peer] = Tuple.Create(addr.ToString(), DateTime.UtcNow);
+                        cooldown.Remove(peer + "|" + addr);
                     }
+                    ok = true;
                     var h = PeerData;
                     if (h != null) h(pd, text);
                 }
             }
             catch (Exception ex) { Report("Couldn't get data from a player at " + addr + ": " + ex.Message); }
-            finally { lock (gate) fetching.Remove(peer); }
+            finally
+            {
+                lock (gate)
+                {
+                    fetching.Remove(peer);
+                    // Fetching from this address failed: it's ignored for this player for a while (not
+                    // their own computer's address, which a passing hiccup shouldn't lock out).
+                    Tuple<string, DateTime> home;
+                    bool isHome = idHome.TryGetValue(peer, out home) && home.Item1 == addr.ToString();
+                    if (!ok && !isHome) cooldown[peer + "|" + addr] = DateTime.UtcNow.AddMinutes(2);
+                }
+            }
         }
 
         void AcceptLoop()
@@ -682,7 +840,22 @@ namespace QGSCompanion
 
         void Serve(TcpClient c)
         {
+            // Only a few at a time and at most MaxServingPerAddress from one computer, so one machine
+            // can't take every slot. Whoever doesn't prove they have the code within AuthSeconds is cut
+            // off; a member then gets ServeSeconds for the data.
+            string from;
+            try { from = ((IPEndPoint)c.Client.RemoteEndPoint).Address.ToString(); } catch { try { c.Close(); } catch { } return; }
+            bool room;
+            lock (gate)
+            {
+                int mine;
+                servingFrom.TryGetValue(from, out mine);
+                room = serving < MaxServing && mine < MaxServingPerAddress;
+                if (room) { serving++; servingFrom[from] = mine + 1; }
+            }
+            if (!room) { try { c.Close(); } catch { } return; }
             using (c)
+            using (var limit = new System.Threading.Timer(_ => { try { c.Close(); } catch { } }, null, AuthSeconds * 1000, Timeout.Infinite))
             {
                 try
                 {
@@ -690,20 +863,30 @@ namespace QGSCompanion
                     var s = c.GetStream();
                     // Fresh challenge for this connection only.
                     string sn = Nonce();
-                    byte[] hello = Encoding.UTF8.GetBytes("QGSC2 HELLO " + sn + " " + Id + "\n");
+                    byte[] hello = Encoding.UTF8.GetBytes("QGSC3 HELLO " + sn + " " + Id + "\n");
                     s.Write(hello, 0, hello.Length);
                     string line = ReadLine(s, 200);
                     string[] req = line == null ? new string[0] : line.Split(' ');
-                    // "QGSC2 GET <client nonce> <signature over both nonces and our id>":
+                    // "QGSC3 GET <client nonce> <signature over both nonces and our id>":
                     // answer only someone who knows the group code, on this connection.
-                    if (req.Length != 4 || req[0] != "QGSC2" || req[1] != "GET" || !Regex.IsMatch(req[2], "^[0-9a-f]{32}$")) return;
+                    if (req.Length != 4 || req[0] != "QGSC3" || req[1] != "GET" || !Regex.IsMatch(req[2], "^[0-9a-f]{32}$")) return;
                     if (!Profile.SameSig(req[3], Profile.Sign(key, "get|" + sn + "|" + req[2] + "|" + Id))) return;
+                    limit.Change(ServeSeconds * 1000, Timeout.Infinite);   // a member: time to send the data
                     string p;
                     lock (gate) p = payload;
-                    byte[] data = Encoding.UTF8.GetBytes("QGSC2 OK " + Profile.Sign(key, "resp|" + sn + "|" + req[2] + "|" + p) + "\n" + p);
+                    byte[] data = Encoding.UTF8.GetBytes("QGSC3 OK " + Profile.Sign(key, "resp|" + sn + "|" + req[2] + "|" + p) + "\n" + p);
                     s.Write(data, 0, data.Length);
                 }
                 catch { }
+                finally
+                {
+                    lock (gate)
+                    {
+                        serving--;
+                        int mine;
+                        if (servingFrom.TryGetValue(from, out mine)) { if (mine <= 1) servingFrom.Remove(from); else servingFrom[from] = mine - 1; }
+                    }
+                }
             }
         }
     }

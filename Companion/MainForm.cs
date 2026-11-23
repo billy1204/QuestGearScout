@@ -689,6 +689,7 @@ namespace QGSCompanion
             Item(publishMenu, "Local sharing...", "", ShowSharing);
             Item(publishMenu, "Save share file...", "", SaveExport);
             Item(publishMenu, "Restore points...", "", ShowRestorePoints);
+            Item(publishMenu, "Open learned chains folder", "", () => OpenFolder(Directory.Exists(LearnedStore.Dir) ? LearnedStore.Dir : RestorePoints.Root));
             publishMenu.Items.Add(new ToolStripSeparator());
             var oAddon = Item(publishMenu, "Open addon folder", "", () => OpenFolder(AddonDir));
             var oSaved = Item(publishMenu, "Open saved game data folder", "", () => { string p = SavedVarsPath(); OpenFolder(p == null ? null : Path.GetDirectoryName(p)); });
@@ -999,6 +1000,8 @@ namespace QGSCompanion
             catch (InvalidOperationException) { }
         }
 
+        int storeTicks;
+
         void PollTick()
         {
             try
@@ -1033,6 +1036,8 @@ namespace QGSCompanion
                     // Online dots and "seen 3 min ago" change over time.
                     if (view == "players") { playersList.Invalidate(); detail.Invalidate(); footer.Invalidate(); lblShowing.Text = PlayersCountText(); }
                 }
+                // Every account's learned chains, kept in Documents\QuestGearScout\Data\Learned (about every 10 seconds).
+                if (!uiTest && ++storeTicks % 2 == 0) StoreAllAccounts();
             }
             catch { }
         }
@@ -1060,7 +1065,8 @@ namespace QGSCompanion
                 try
                 {
                     var stamp = File.GetLastWriteTime(p);
-                    var l = Learned.FromSavedVariables(ReadShared(p), addon, qualityBox.SelectedIndex + 2);
+                    string svText = ReadShared(p);
+                    var l = Learned.FromSavedVariables(svText, addon, qualityBox.SelectedIndex + 2);
                     var r = l.Rows(addon);
                     var keys = new HashSet<string>(r.Select(x => x.Key));
                     bool changed = prevPath != p || stamp != lastWrite;
@@ -1073,11 +1079,17 @@ namespace QGSCompanion
                     else appeared.IntersectWith(keys);
                     prevKeys = keys; prevPath = p;
                     learned = l; rows = WithShared(r); hasData = true; lastWrite = stamp;
+                    // Keep everything learned in Documents\QuestGearScout\Data\Learned too.
+                    var a = accountBox.SelectedItem as AccountItem;
+                    var saved = a == null ? null : StoreLearned(a.Name, p, svText, stamp);
                     if (changed && appeared.Count > 0)
                     {
-                        Msg(Plural(appeared.Count, "chain") + " appeared after your last /reload.", false);
+                        Msg(Plural(appeared.Count, "chain") + " appeared after your last /reload" +
+                            (saved != null && saved.Added > 0 ? " - saved in Documents\\QuestGearScout\\Data\\Learned." : "."), false);
                         freshTimer.Stop(); freshTimer.Start();
                     }
+                    else if (saved != null && saved.Added > 0)
+                        Msg("Saved " + Plural(saved.Added, "learned chain") + " in Documents\\QuestGearScout\\Data\\Learned (" + saved.Total + " in all).", false);
                 }
                 catch (Exception ex)
                 {
@@ -2694,6 +2706,7 @@ namespace QGSCompanion
             f.TestSize(1024, 640);
             f.TestSetGame(gameDir); Application.DoEvents();
             log.Append("== loaded\n").Append(f.TestDump());
+            log.Append("== learned chains saved in Documents\\QuestGearScout\\Data\\Learned\n").Append(f.TestLearnedStore());
             Shot(f, Path.Combine(shots, "shot-1-new.png"));
             log.Append("== author details toggle: ").Append(f.TestAuthorToggle()).Append('\n');
             log.Append("== toolbar at 1024: ").Append(f.TestToolbar()).Append('\n');
@@ -2772,7 +2785,7 @@ namespace QGSCompanion
             log.Append("== group panel: not in a group, not looking yet\n").Append(f.TestGroupBar());
             f.TestFindGroups();
             log.Append("== group panel: looking, nobody around\n").Append(f.TestGroupBar());
-            f.TestNearby("gnomes42", "Gnome Guild", 3);
+            f.TestNearby("gnome guild forever 42", "Gnome Guild", 3);
             f.TestNearby("ironforge regulars", "Ironforge Irregulars", 1);
             f.TestNearby("old app group", null, 2);
             log.Append("== group panel: three groups nearby\n").Append(f.TestGroupBar());
@@ -2781,11 +2794,11 @@ namespace QGSCompanion
             f.TestDialogShot(f.BuildJoinDialog(gnomes), Path.Combine(shots, "shot-17-join.png"));
             f.TestDialogShot(f.BuildCreateDialog(), Path.Combine(shots, "shot-18-create.png"));
             log.Append("== create: name taken nearby: ").Append(f.TestDialog(f.BuildCreateDialog(), "gnome guild", "Tester", "something else")).Append('\n');
-            log.Append("== create: code already used nearby: ").Append(f.TestDialog(f.BuildCreateDialog(), "My Crew", "Tester", " Gnomes42")).Append('\n');
+            log.Append("== create: code already used nearby: ").Append(f.TestDialog(f.BuildCreateDialog(), "My Crew", "Tester", " Gnome Guild FOREVER 42 ")).Append('\n');
             log.Append("== create: code too short: ").Append(f.TestDialog(f.BuildCreateDialog(), "My Crew", "Tester", "abc")).Append('\n');
-            log.Append("== join Gnome Guild, no nickname: ").Append(f.TestDialog(f.BuildJoinDialog(gnomes), "", "", "gnomes42")).Append('\n');
+            log.Append("== join Gnome Guild, no nickname: ").Append(f.TestDialog(f.BuildJoinDialog(gnomes), "", "", "gnome guild forever 42")).Append('\n');
             log.Append("== join Gnome Guild, wrong code: ").Append(f.TestDialog(f.BuildJoinDialog(gnomes), "", "Tester", "orcs99")).Append('\n');
-            log.Append("== join Gnome Guild, right code typed differently: ").Append(f.TestDialog(f.BuildJoinDialog(gnomes), "", "Tester", " GNOMES42 ")).Append('\n');
+            log.Append("== join Gnome Guild, right code typed differently: ").Append(f.TestDialog(f.BuildJoinDialog(gnomes), "", "Tester", " GNOME guild Forever 42 ")).Append('\n');
             log.Append("== group panel: just joined (the name comes from its players, signed, once online)\n").Append(f.TestGroupBar());
             f.TestPeerInGroup(payload("dddddddddddddddddddddddddddddddd", "Gnomey", new PlayerStats { Gear = 4, Factions = "A", Known = 4, Possible = 320 },
                 new[] { row("C", 90004, "Gnome Tinker", "A", 3), row("C", 90005, "Wandering Fisher", null, 2), row("C", 90006, "Horde Spymaster", "H", 4) }));
@@ -2856,6 +2869,11 @@ namespace QGSCompanion
             }
             f.TestSetGame(Path.Combine(gameDir, "Interface", "AddOns")); Application.DoEvents();
             log.Append("== picked Interface\\AddOns\n").Append(f.TestDump());
+            // A flood of made-up players in one group: only the most recent are kept.
+            for (int i = 0; i < 70; i++)
+                f.TestPeerInGroup(payload((0xe0000 + i).ToString("x32"), "Flood" + i, new PlayerStats { Gear = 1, Factions = "A" }, new[] { row("C", 95000 + i, "Flood Giver " + i, "A", 2) }));
+            log.Append("== 70 made-up players arrive in one group: " + f.TestPeersInGroup() + " kept (at most " + MainForm.MaxPeersPerGroup + "), " +
+                f.TestStoredPeers() + " stored on disk\n");
             f.Close();
             File.WriteAllText(outFile, log.ToString(), new UTF8Encoding(false));
             return 0;

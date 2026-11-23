@@ -3,6 +3,8 @@
 // nothing leaves the PC) and checks who gets whose data.
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
@@ -130,10 +132,10 @@ namespace QGSCompanion
                 {
                     long t0 = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
                     string evilBody = gnomes + "|dddddddddddddddddddddddddddddddd|" + t0 + "|5000|Fake Name";
-                    foreach (string m in new[] { "QGSC2G|" + evilBody + "|" + new string('a', 64),                                  // wrong signature
-                                                 "QGSC2G|" + gnomes + "|dddddddddddddddddddddddddddddddd|" + t0 + "|5000|Bad;Name|" + new string('a', 64),   // not a clean name
-                                                 "QGSC2G|" + gnomes + "|dddddddddddddddddddddddddddddddd|" + (t0 - 3600) + "|5000|Old Name|" + new string('a', 64),   // an hour old
-                                                 "QGSC2G|" + gnomes + "|dddddddddddddddddddddddddddddddd|" + t0 + "|" + (t0 + 86400) + "|Future Name|" + new string('a', 64) }) // "renamed" tomorrow
+                    foreach (string m in new[] { "QGSC3G|" + evilBody + "|" + new string('a', 64),                                  // wrong signature
+                                                 "QGSC3G|" + gnomes + "|dddddddddddddddddddddddddddddddd|" + t0 + "|5000|Bad;Name|" + new string('a', 64),   // not a clean name
+                                                 "QGSC3G|" + gnomes + "|dddddddddddddddddddddddddddddddd|" + (t0 - 3600) + "|5000|Old Name|" + new string('a', 64),   // an hour old
+                                                 "QGSC3G|" + gnomes + "|dddddddddddddddddddddddddddddddd|" + t0 + "|" + (t0 + 86400) + "|Future Name|" + new string('a', 64) }) // "renamed" tomorrow
                     {
                         byte[] b = Encoding.UTF8.GetBytes(m);
                         u.Send(b, b.Length, new IPEndPoint(IPAddress.Loopback, pb));
@@ -176,13 +178,13 @@ namespace QGSCompanion
                     catch { }
                     return new[] { helloLine, rest };
                 };
-                var r1 = talk(sn => "QGSC2 GET " + new string('0', 32) + " " + new string('f', 64));
-                check("the other app opens with a fresh challenge naming itself", r1[0].StartsWith("QGSC2 HELLO ") && r1[0].EndsWith(" " + B.Id));
+                var r1 = talk(sn => "QGSC3 GET " + new string('0', 32) + " " + new string('f', 64));
+                check("the other app opens with a fresh challenge naming itself", r1[0].StartsWith("QGSC3 HELLO ") && r1[0].EndsWith(" " + B.Id));
                 check("a request without the code gets no data", !r1[1].Contains("QGSC-PROFILE"));
                 // Someone with the code answers correctly once: they get data.
                 string cn = new string('1', 32), captured = null;
-                var r2 = talk(sn => captured = "QGSC2 GET " + cn + " " + Profile.Sign(gk, "get|" + sn + "|" + cn + "|" + B.Id));
-                check("a correctly signed request gets the data", r2[1].StartsWith("QGSC2 OK ") && r2[1].Contains("QGSC-PROFILE"));
+                var r2 = talk(sn => captured = "QGSC3 GET " + cn + " " + Profile.Sign(gk, "get|" + sn + "|" + cn + "|" + B.Id));
+                check("a correctly signed request gets the data", r2[1].StartsWith("QGSC3 OK ") && r2[1].Contains("QGSC-PROFILE"));
                 // An eavesdropper replays that exact request on a new connection: the challenge changed, so nothing.
                 var r3 = talk(sn => captured);
                 check("a captured request can't be replayed", !r3[1].Contains("QGSC-PROFILE"));
@@ -196,7 +198,7 @@ namespace QGSCompanion
                 Func<long, bool, byte[]> beaconFor = (ts, goodSig) =>
                 {
                     string body = Profile.GroupHash("gnomes42") + "|" + fakeId + "|" + fakePort + "|0123abcd|" + ts + "|Faker";
-                    return Encoding.UTF8.GetBytes("QGSC2|" + body + "|" + (goodSig ? Profile.Sign(gk, "beacon|" + body) : new string('a', 64)));
+                    return Encoding.UTF8.GetBytes("QGSC3|" + body + "|" + (goodSig ? Profile.Sign(gk, "beacon|" + body) : new string('a', 64)));
                 };
                 long now = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
                 var fakeThread = new Thread(() =>
@@ -209,10 +211,10 @@ namespace QGSCompanion
                                 Interlocked.Increment(ref fakeHits);
                                 var s = c.GetStream();
                                 // Plays along with the handshake but can't sign the data (doesn't know the code).
-                                byte[] hello = Encoding.UTF8.GetBytes("QGSC2 HELLO " + new string('2', 32) + " " + fakeId + "\n");
+                                byte[] hello = Encoding.UTF8.GetBytes("QGSC3 HELLO " + new string('2', 32) + " " + fakeId + "\n");
                                 s.Write(hello, 0, hello.Length);
                                 var buf = new byte[512]; s.Read(buf, 0, buf.Length);
-                                byte[] resp = Encoding.UTF8.GetBytes("QGSC2 OK " + new string('a', 64) + "\n" +
+                                byte[] resp = Encoding.UTF8.GetBytes("QGSC3 OK " + new string('a', 64) + "\n" +
                                     Payload(fakeId, "Faker", new PlayerStats { Gear = 99999 }, Row("C", 666, "Fake Giver", "A", 4, null)));
                                 s.Write(resp, 0, resp.Length);
                             }
@@ -245,8 +247,136 @@ namespace QGSCompanion
                 Thread.Sleep(2000);
                 lock (got) check("a forgotten player is not fetched again", got[A.Id].Count(p => p.Id == B.Id) == before);
                 check("a never-heard player has no last heard time", A.LastHeard("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") == DateTime.MinValue);
+
+                // ---- network safety (1.10.2) ----
+                log.Append("Network safety\n");
+                check("the group id sent isn't the old fast hash (and is 32 hex)", gnomes != Profile.LegacyGroupHash("gnomes42") && Profile.IsId(gnomes));
+                DateTime k0 = DateTime.UtcNow;
+                Profile.GroupHash("timing check " + Guid.NewGuid().ToString("N"));
+                double kdfMs = (DateTime.UtcNow - k0).TotalMilliseconds;
+                check("turning a code into the group id is deliberately slow (" + (int)kdfMs + " ms; guessing codes is slow too)", kdfMs > 100);
+                check("short or repetitive codes count as weak; suggested codes don't",
+                    Profile.WeakCode("gnomes42") != null && Profile.WeakCode("aaaaaaaaaaaaaaaa") != null && Enumerable.Range(0, 20).All(_ => Profile.WeakCode(Profile.SuggestCode()) == null));
+                check("suggested codes are different every time", Enumerable.Range(0, 10).Select(_ => Profile.SuggestCode()).Distinct().Count() == 10);
+
+                // A player in the group still running an app from before 1.10.2.
+                var older = new List<string>();
+                A.OlderAppHeard += (oid, onick) => { lock (older) older.Add(oid + "|" + onick); };
+                using (var u = new UdpClient())
+                {
+                    string oldBody = Profile.LegacyGroupHash("gnomes42") + "|eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee|40000|abcd|" + LanShare.UnixNow() + "|OldTimer";
+                    byte[] ob = Encoding.UTF8.GetBytes("QGSC2|" + oldBody + "|" + new string('a', 64));
+                    for (int k = 0; k < 2; k++) { u.Send(ob, ob.Length, new IPEndPoint(IPAddress.Loopback, pa)); Thread.Sleep(300); }
+                }
+                lock (older) check("a player in your group with an older app is noticed (once), so you can tell them to update",
+                    older.Count == 1 && older[0] == "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee|OldTimer");
+
+                // One computer can only bring a few player ids (A has heard B and the insider from 127.0.0.1).
+                Func<string, int, string, byte[]> signedBeacon = (pid, port, ver) =>
+                {
+                    string body = gnomes + "|" + pid + "|" + port + "|" + ver + "|" + LanShare.UnixNow() + "|Many";
+                    return Encoding.UTF8.GetBytes("QGSC3|" + body + "|" + Profile.Sign(gk, "beacon|" + body));
+                };
+                string[] extra = { new string('9', 32), new string('8', 32), new string('7', 32) };
+                using (var u = new UdpClient())
+                    foreach (string x in extra)
+                        for (int k = 0; k < 2; k++) { byte[] eb = signedBeacon(x, 1, "abcd"); u.Send(eb, eb.Length, new IPEndPoint(IPAddress.Loopback, pa)); Thread.Sleep(150); }
+                Thread.Sleep(300);
+                check("one computer can't bring more than " + LanShare.MaxIdsPerAddress + " player ids", A.IsOnline(extra[0]) && !A.IsOnline(extra[1]) && !A.IsOnline(extra[2]));
+
+                // A copied beacon sent from another computer: ignored while the player's own computer is heard.
+                var relay = new TcpListener(IPAddress.Parse("127.0.0.2"), 0);
+                int relayHits = 0;
+                try
+                {
+                    relay.Start();
+                    int relayPort = ((IPEndPoint)relay.LocalEndpoint).Port;
+                    relay.BeginAcceptTcpClient(ar => { Interlocked.Increment(ref relayHits); try { relay.EndAcceptTcpClient(ar).Close(); } catch { } }, null);
+                    using (var u = new UdpClient(new IPEndPoint(IPAddress.Parse("127.0.0.2"), 0)))
+                        for (int k = 0; k < 3; k++) { byte[] rb = signedBeacon(A.Id, relayPort, "feedfacefeedface"); u.Send(rb, rb.Length, new IPEndPoint(IPAddress.Loopback, pb)); Thread.Sleep(300); }
+                    Thread.Sleep(500);
+                    int copiedHits = relayHits;
+                    // Control: a player whose own computer that is does get a connection from there.
+                    using (var u = new UdpClient(new IPEndPoint(IPAddress.Parse("127.0.0.2"), 0)))
+                        for (int k = 0; k < 2; k++) { byte[] rb = signedBeacon(new string('5', 32), relayPort, "abcd"); u.Send(rb, rb.Length, new IPEndPoint(IPAddress.Loopback, pb)); Thread.Sleep(300); }
+                    Thread.Sleep(500);
+                    check("a player's beacon copied and sent from another computer is ignored (no connection to it), while a player there is reached",
+                        copiedHits == 0 && relayHits > 0);
+                }
+                finally { relay.Stop(); }
             }
             finally { A.Dispose(); B.Dispose(); C.Dispose(); D.Dispose(); }
+
+            // ---- time limits on downloads and incoming connections ----
+            var H = new LanShare("abcdefabcdefabcdefabcdefabcdefab", "gnomes42") { UdpPort = 47954, Bind = IPAddress.Loopback, BroadcastBeacons = false, BeaconMs = 60000, FetchSeconds = 2, AuthSeconds = 1, ServeSeconds = 1 };
+            H.SetProfile("Holder", Payload(H.Id, "Holder", new PlayerStats(), Row("C", 701, "Giver", "A", 2, null)));
+            var hProblems = new List<DateTime>();
+            H.Problem += msg => { lock (hProblems) hProblems.Add(DateTime.UtcNow); };
+            var slow = new TcpListener(IPAddress.Parse("127.0.0.3"), 0);
+            try
+            {
+                H.Start();
+                slow.Start();
+                int slowPort = ((IPEndPoint)slow.LocalEndpoint).Port;
+                string slowId = new string('6', 32);
+                // A server that answers, then sends one byte a second forever.
+                new Thread(() =>
+                {
+                    try
+                    {
+                        using (var c = slow.AcceptTcpClient())
+                        {
+                            var s = c.GetStream();
+                            byte[] hl = Encoding.UTF8.GetBytes("QGSC3 HELLO " + new string('3', 32) + " " + slowId + "\n");
+                            s.Write(hl, 0, hl.Length);
+                            for (int k = 0; k < 30; k++) { s.WriteByte((byte)'Q'); Thread.Sleep(1000); }
+                        }
+                    }
+                    catch { }
+                }) { IsBackground = true }.Start();
+                byte[] gkH = Profile.GroupKey("gnomes42");
+                string sbody = Profile.GroupHash("gnomes42") + "|" + slowId + "|" + slowPort + "|abcd|" + LanShare.UnixNow() + "|Slow";
+                byte[] sb2 = Encoding.UTF8.GetBytes("QGSC3|" + sbody + "|" + Profile.Sign(gkH, "beacon|" + sbody));
+                DateTime sent = DateTime.UtcNow;
+                using (var u = new UdpClient(new IPEndPoint(IPAddress.Parse("127.0.0.3"), 0))) u.Send(sb2, sb2.Length, new IPEndPoint(IPAddress.Loopback, 47954));
+                for (int k = 0; k < 60; k++) { Thread.Sleep(100); lock (hProblems) if (hProblems.Count > 0) break; }
+                double gaveUp; lock (hProblems) gaveUp = hProblems.Count > 0 ? (hProblems[0] - sent).TotalSeconds : 999;
+                check("a download that's trickled one byte at a time is given up after its time limit (" + gaveUp.ToString("0.0", CultureInfo.InvariantCulture) + " s)", gaveUp < 4);
+
+                // Incoming: one computer gets at most 2 at once (so it can't take every slot from the
+                // others), and anyone who doesn't prove they have the code is cut off after a few
+                // seconds, even while sending a byte now and then.
+                var clients = new List<TcpClient>();
+                int greeted = 0;
+                Func<string, TcpClient> open = local =>
+                {
+                    var cl = new TcpClient(new IPEndPoint(IPAddress.Parse(local), 0));
+                    cl.Connect(IPAddress.Loopback, H.TcpPort);
+                    cl.ReceiveTimeout = 1500;
+                    clients.Add(cl);
+                    Thread.Sleep(50);
+                    return cl;
+                };
+                Func<TcpClient, bool> greets = cl => { try { return cl.GetStream().ReadByte() == 'Q'; } catch { return false; } };
+                try
+                {
+                    for (int k = 0; k < LanShare.MaxServingPerAddress + 1; k++) open("127.0.0.1");
+                    foreach (var cl in clients) if (greets(cl)) greeted++;
+                    check("one computer gets at most " + LanShare.MaxServingPerAddress + " incoming connections at once", greeted == LanShare.MaxServingPerAddress);
+                    check("...while another computer is still answered", greets(open("127.0.0.4")));
+                    var drip = clients[0].GetStream();
+                    DateTime d0 = DateTime.UtcNow;
+                    bool closed = false;
+                    for (int k = 0; k < 20 && !closed; k++)
+                    {
+                        try { drip.WriteByte((byte)'x'); Thread.Sleep(200); if (clients[0].Client.Poll(0, SelectMode.SelectRead) && clients[0].Client.Available == 0) closed = true; }
+                        catch { closed = true; }
+                    }
+                    check("an incoming connection that sends a byte now and then is still closed after its time limit", closed && (DateTime.UtcNow - d0).TotalSeconds < 3);
+                }
+                finally { foreach (var cl in clients) try { cl.Close(); } catch { } }
+            }
+            finally { slow.Stop(); H.Dispose(); }
 
             // ---- the list of groups nearby: names, expiry, caps ----
             log.Append("Group list\n");
@@ -272,7 +402,7 @@ namespace QGSCompanion
             check("on a tie the newest rename is shown", tie.Snapshot(t)[0].Name == "New Name");
             var full = new GroupDirectory();
             for (int i = 0; i < 100; i++) full.Heard(h1, i.ToString("x32"), null, 0, t);
-            for (int i = 0; i < 100; i++) full.Heard(Profile.GroupHash("g" + i), "44444444444444444444444444444444", "G" + i, 0, t);
+            for (int i = 0; i < 100; i++) full.Heard(i.ToString("x32"), "44444444444444444444444444444444", "G" + i, 0, t);
             var fs = full.Snapshot(t);
             check("at most 64 groups and 64 players per group are kept", fs.Count == GroupDirectory.MaxGroups && fs[0].Hash == h1 && fs[0].Online == GroupDirectory.MaxMembers);
 
@@ -379,6 +509,74 @@ namespace QGSCompanion
                 bp != null && bp.Chains.Count == 2 && bp.Chains.Values.Any(Starter.IsBoth) && bp.Chains.Values.Any(s => Starter.Tag(s) == "H"));
             check("'seen by both' is never written into the addon's files",
                 !AddonData.SharedText(ChainRow.Pack(new[] { new ChainRow { Starter = bothOut, IsDungeon = false, Faction = null, Both = true } }, null).Values).Contains("\tB\t"));
+            // ---- learned chains kept in Documents\QuestGearScout\Data\Learned ----
+            log.Append("Learned chains store\n");
+            string oldRoot = RestorePoints.Root;
+            RestorePoints.Root = Path.Combine(Path.GetTempPath(), "qgs-learned-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Func<string, string> svWith = quests => "QuestGearScoutDB = {\n[\"quests\"] = {\n" + quests + "},\n}\n";
+                Func<int, string, string, int, string> quest = (id, title, faction, giver) =>
+                    "[" + id + "] = { [\"title\"] = \"" + title + "\", [\"quality\"] = 3" + (faction != null ? ", [\"faction\"] = \"" + faction + "\"" : "") +
+                    ", [\"giver\"] = { [\"kind\"] = \"C\", [\"id\"] = " + giver + ", [\"name\"] = \"Giver " + giver + "\", [\"map\"] = 1429, [\"x\"] = 0.4, [\"y\"] = 0.4 } },\n";
+                var s1 = LearnedStore.Save("Acct#1", "x", svWith(quest(2000, "First", "H", 2100) + quest(2001, "Second", "A", 2101)), new AddonData());
+                string chainsFile = Path.Combine(LearnedStore.FolderFor("Acct#1"), "chains.txt");
+                check("learned chains are saved (2 new)", s1.Added == 2 && s1.Total == 2 && File.Exists(chainsFile));
+                var again = LearnedStore.Save("Acct#1", "x", svWith(quest(2000, "First", "H", 2100) + quest(2001, "Second", "A", 2101)), new AddonData());
+                check("saving the same data again adds nothing", again.Added == 0 && again.Updated == 0 && again.Total == 2);
+                // The game's data is reset (only a new chain in it): the earlier chains stay.
+                var s2 = LearnedStore.Save("Acct#1", "x", svWith(quest(2002, "Third", null, 2102)), new AddonData());
+                var kept = Starter.Decode(File.ReadAllText(chainsFile)).Values.ToList();
+                check("chains are never dropped (the game's data was reset)", s2.Added == 1 && s2.Total == 3 && kept.Count == 3);
+                check("each keeps its faction", kept.Any(s => s.Get("name") == "Giver 2100" && s.Get("faction") == "H") &&
+                    kept.Any(s => s.Get("name") == "Giver 2101" && s.Get("faction") == "A") && kept.Any(s => s.Get("name") == "Giver 2102" && s.Get("faction") == null));
+                // The Horde chain is seen by an Alliance character: it becomes everyone's, not a second copy.
+                var s3 = LearnedStore.Save("Acct#1", "x", svWith(quest(2000, "First", "B", 2100)), new AddonData());
+                var now = Starter.Decode(File.ReadAllText(chainsFile)).Values.ToList();
+                check("a chain that became neutral replaces its Horde copy", s3.Added == 0 && s3.Updated == 1 && now.Count == 3 &&
+                    now.Count(s => s.Get("name") == "Giver 2100") == 1 && now.First(s => s.Get("name") == "Giver 2100").Get("faction") == null);
+                string folder = LearnedStore.FolderFor("Acct#1");
+                check("a readable list and a copy of the game's data are kept too",
+                    File.Exists(Path.Combine(folder, "chains-list.txt")) && File.ReadAllText(Path.Combine(folder, "chains-list.txt")).Contains("Giver 2101") &&
+                    File.Exists(Path.Combine(folder, "QuestGearScout.lua")));
+                check("chains.txt loads with /qgs import's format", File.ReadAllText(chainsFile).StartsWith("QGS1"));
+                string archive = Path.Combine(folder, "all-chains.txt");
+                Func<int> archived = () => File.ReadAllLines(archive).Count(l => l.Contains("\t"));
+                // One giver with two different chains (different first quests), learned at different times.
+                Func<int, int, string, string> chainOf = (first, giver, faction) =>
+                    "[" + first + "] = { [\"title\"] = \"Start " + first + "\", [\"faction\"] = \"" + faction + "\", [\"giver\"] = { [\"kind\"] = \"C\", [\"id\"] = " + giver +
+                    ", [\"name\"] = \"Giver " + giver + "\", [\"map\"] = 1429, [\"x\"] = 0.4, [\"y\"] = 0.4 } },\n" +
+                    "[" + (first + 1) + "] = { [\"title\"] = \"End " + first + "\", [\"prev\"] = " + first + ", [\"quality\"] = 3, [\"faction\"] = \"" + faction + "\" },\n";
+                var t1 = LearnedStore.Save("Acct#2", "x", svWith(chainOf(3000, 3100, "H") + chainOf(3010, 3100, "H")), new AddonData());
+                string archive2 = Path.Combine(LearnedStore.FolderFor("Acct#2"), "all-chains.txt");
+                check("a giver's several chains are all saved", t1.Added == 2 && File.ReadAllLines(archive2).Count(l => l.Contains("\t")) == 2);
+                var t2 = LearnedStore.Save("Acct#2", "x", svWith(chainOf(3020, 3100, "H")), new AddonData());
+                check("...and kept when the game's data only has a newer one", t2.Added == 1 && t2.Total == 3 && File.ReadAllLines(archive2).Count(l => l.Contains("\t")) == 3);
+                // The game's data is reset and the same chain is learned on the other faction: both copies stay.
+                var t3 = LearnedStore.Save("Acct#2", "x", svWith(chainOf(3000, 3100, "A")), new AddonData());
+                check("the Alliance copy of a chain is kept beside the Horde one", t3.Added == 1 && t3.Total == 4);
+                var importText = Starter.Decode(File.ReadAllText(Path.Combine(LearnedStore.FolderFor("Acct#2"), "chains.txt"))).Values.ToList();
+                check("chains.txt (for /qgs import) has one chain per giver and faction, the newest",
+                    importText.Count == 2 && importText.Any(s => s.Get("faction") == "H" && s.Num("rootQuest") == 3020) && importText.Any(s => s.Get("faction") == "A"));
+                check("the readable list has every chain", File.ReadAllText(Path.Combine(LearnedStore.FolderFor("Acct#2"), "chains-list.txt")).Split('\n').Count(l => l.Contains("Giver 3100")) == 4);
+                check("archive count matches", archived() == 3);
+                // One chain with two rewards: one quest both factions saw, one only recorded as Alliance.
+                string twoRewards = "[4000] = { [\"title\"] = \"Start\", [\"giver\"] = { [\"kind\"] = \"C\", [\"id\"] = 4100, [\"name\"] = \"Giver 4100\", [\"map\"] = 1429, [\"x\"] = 0.4, [\"y\"] = 0.4 } },\n" +
+                    "[4001] = { [\"title\"] = \"Reward one\", [\"prev\"] = 4000, [\"quality\"] = 3, [\"faction\"] = \"B\" },\n" +
+                    "[4002] = { [\"title\"] = \"Reward two\", [\"prev\"] = 4000, [\"quality\"] = 2, [\"faction\"] = \"A\" },\n";
+                var u1 = LearnedStore.Save("Acct#3", "x", svWith(twoRewards), new AddonData());
+                var u2 = LearnedStore.Save("Acct#3", "x", svWith(twoRewards), new AddonData());
+                check("a chain both factions saw is saved once, and saving again changes nothing",
+                    u1.Added == 1 && u1.Total == 1 && u2.Added == 0 && u2.Updated == 0 && u2.Total == 1);
+                check("...and it's listed as for both factions",
+                    File.ReadAllText(Path.Combine(LearnedStore.FolderFor("Acct#3"), "chains-list.txt")).Contains("both factions"));
+            }
+            finally
+            {
+                try { Directory.Delete(RestorePoints.Root, true); } catch { }
+                RestorePoints.Root = oldRoot;
+            }
+
             var peerBoth = Profile.Parse(Profile.Build("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "Twofold", new PlayerStats(), both2.Values));
             check("a player's Horde and Alliance entries for one giver both arrive", peerBoth != null && peerBoth.Chains.Count == 2);
 

@@ -39,20 +39,34 @@ Friends on the same home network can swap the chains they've found and compare p
 - **In a group**, the panel shows its name, who's online and the players you share with, plus **Group settings...** and **Leave group**.
 - The arrow at the top tucks the panel away into a slim strip (click the strip to bring it back). On a narrow window it becomes that strip by itself; click it for a menu with the same choices.
 
-Everyone on your network can see a group's name, but only apps with its code can see you or send you chains, so use a code that's hard to guess (a few words is good). The app only listens for groups after you click **Look for groups**. The first time, Windows may ask to let the app through its firewall: allow it for **private networks**.
+Everyone on your network can see a group's name, but only apps with its code can see you or send you chains. **Create group** fills in a strong code (five random words and a number); a code you type yourself must be at least 12 characters. If your group's code is shorter, the app tells you: create a new group with a strong code to be safe. The app only listens for groups after you click **Look for groups**. The first time, Windows may ask to let the app through its firewall: allow it for **private networks**.
 
-You can also set things up the older way: **Publish ▾ > Local sharing...** (or click the *Sharing* pill at the top), tick **Share with players on my local network**, and type a nickname, an optional group name and the code. Groups set up on older versions of the app still work together with this one; they show as *Unnamed group* to others until someone in the group types a name there.
+You can also set things up the older way: **Publish ▾ > Local sharing...** (or click the *Sharing* pill at the top), tick **Share with players on my local network**, and type a nickname, an optional group name and the code. Groups without a name show as *Unnamed group* to others until someone in the group types one there.
+
+**Since 1.10.2, everyone in a group needs version 1.10.2 or newer.** The group code is now turned into the network key in a way that makes guessing it very slow, and older versions can't talk to that. When someone in your group still has an older app, yours shows their nickname so you can ask them to update.
 
 - **Chains**: every few seconds the apps find each other and fetch what changed. Chains you don't have appear in the list marked *From <nickname>*. They're written to the addon's `Shared.lua` (sharing on its own never touches your `Discoveries.lua`), so they show up in game after `/reload`.
 - **Getting a player's chains**: click a player in the **Local group** panel (a badge like *2 new* shows when they have chains you don't). A window lists the chains they shared that are new to you, plus *Update* for chains you have that they have a different version of. Only chains for the factions you play are listed. Untick any you don't want and click **Update**: the chains are copied into your `Discoveries.lua` (so they're yours, and go out with your next release), and a copy of them is kept in `Documents\QuestGearScout\Data\Received chains` (the same text `/qgs import` takes).
-
-## Restore points
-Every time the app changes `Discoveries.lua` (getting a player's chains, **Add to addon**, **Remove**, **Undo**, restoring) it first saves a **restore point** in `Documents\QuestGearScout\Data\Restore points`, a copy of the file and a note of what happened. If the change can't be saved there, nothing is changed. The new state is saved too, so you can always get back to any of them. Open **Publish ▾ > Restore points...** (also in a player's chains window), pick one and click **Restore**. The way things are now is saved first, so a restore can be undone the same way (or with Ctrl+Z). The app never deletes restore points; they're small text files you can remove yourself.
 - **Horde and Alliance**: each chain carries its faction. In game a character only gets chains for its own faction plus neutral ones; a Horde chain never shows for an Alliance character, and the other way round. In the app you see the factions you play, each labelled; if you play both, **Filters ▾** can narrow it to one.
 - **Players view**: a leaderboard of everyone in your group with their rank, points, factions, gear and dungeon chains, new finds, progress through the addon's chains and 15 achievements. Ranks go Wanderer, Scout, Pathfinder, Explorer, Cartographer, Loremaster, Legend.
 - **Forget player** removes someone's chains and stats and keeps them out until you press **Un-forget all**. **Sync now** asks everyone for their latest data.
 
 What's sent: your nickname, stats and the chains you found that aren't built into the addon. Nothing else from your PC or game account, and it never leaves your local network.
+
+Safety limits: a player stays tied to the computer they were first heard from (a copy of their message sent from another computer is ignored), one computer can bring at most 3 players, at most 64 players per group (200 in all) are kept, a player's data is stored only after it's been checked and cleaned, `Shared.lua` holds at most 20,000 chains, and every download and incoming connection has a time limit (at most 8 incoming at once).
+
+## Restore points
+Every time the app changes `Discoveries.lua` (getting a player's chains, **Add to addon**, **Remove**, **Undo**, restoring) it first saves a **restore point** in `Documents\QuestGearScout\Data\Restore points`, a copy of the file and a note of what happened. If the change can't be saved there, nothing is changed. The new state is saved too, so you can always get back to any of them. Open **Publish ▾ > Restore points...** (also in a player's chains window), pick one and click **Restore**. The way things are now is saved first, so a restore can be undone the same way (or with Ctrl+Z). The app never deletes restore points; they're small text files you can remove yourself.
+
+## Learned chains, saved for you
+Each time the game saves (when you log out or type `/reload`), the app reads every chain the addon has learned and keeps them in `Documents\QuestGearScout\Data\Learned`, one folder per WoW account (every account in the game folder, not just the one shown):
+
+- `all-chains.txt`: every chain found so far, one per line, with its faction: all of a quest giver's chains, and each faction's copy. Chains are only added or updated here, never dropped, so they stay even if the game's saved data is reset.
+- `chains.txt`: the same chains as the text `/qgs import` takes, so you can load them back in game. That format holds one chain per quest giver and faction (gear or dungeon), so where a giver has several, the newest is used.
+- `chains-list.txt`: every chain, one readable line each (giver, zone and spot, gear or dungeon, reward, faction).
+- `QuestGearScout.lua`: a copy of the game's saved data as it was last read.
+
+A chain that becomes neutral (both factions have seen it) replaces its one-faction copy. **Publish ▾ > Open learned chains folder** opens the folder.
 
 ## Shortcuts
 | Key | Does |
@@ -73,7 +87,7 @@ The app only reads and writes files on your PC. It never touches the running gam
 It uses the C# compiler that comes with Windows, so nothing needs installing:
 
 ```
-C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /optimize+ /out:bin\QuestGearScoutCompanion.exe /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll Core.cs Ui.cs AddonCheck.cs CheckerForm.cs Progress.cs Lan.cs LanTest.cs Sharing.cs GroupBar.cs PlayerChains.cs MainForm.cs
+C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /optimize+ /out:bin\QuestGearScoutCompanion.exe /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll Core.cs Ui.cs AddonCheck.cs CheckerForm.cs Progress.cs Lan.cs LanTest.cs Sharing.cs GroupBar.cs PlayerChains.cs LearnedStore.cs MainForm.cs
 ```
 
 `QuestGearScoutCompanion.exe --lantest <output.txt>` runs the sharing self-test on 127.0.0.1 only (handshake, wrong group code, replayed requests, fake players, groups nearby and forged group names, Horde/Alliance merging, ranks).

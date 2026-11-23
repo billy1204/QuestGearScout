@@ -46,7 +46,14 @@ namespace QGSCompanion
         void InitSharing()
         {
             var fg = Forgotten();
-            foreach (var p in SharedStore.LoadAll()) if (p.Id != PeerId && !fg.Contains(p.Id)) peers[p.Id] = p;
+            // Players saved by an app before 1.10.2 carry the old form of the group id: still your group.
+            string legacy = GroupCode.Trim() == "" ? null : Profile.LegacyGroupHash(GroupCode), mine = legacy == null ? null : Profile.GroupHash(GroupCode);
+            foreach (var p in SharedStore.LoadAll())
+            {
+                if (p.Id == PeerId || fg.Contains(p.Id)) continue;
+                if (legacy != null && p.Group == legacy) p.Group = mine;
+                peers[p.Id] = p;
+            }
             if (peers.Count > 0) Reload();
             if (!uiTest) StartSharing();
             RefreshGroupBar();
@@ -67,10 +74,24 @@ namespace QGSCompanion
                 eng.PeerData += (p, raw) => { p.Group = eng.Group; OnUi(() => OnPeer(p, raw)); };
                 lan.GroupHeard += OnGroupHeard;
                 lan.Problem += msg => OnUi(() => { if (!quietProblems) Msg(msg, true); });
+                // Someone in the group still has an app from before 1.10.2: it can't share with this one.
+                lan.OlderAppHeard += (id, nick) => OnUi(() => Msg((nick == "" ? "A player" : nick) +
+                    " in your group has an older Companion app (before 1.10.2), which can't share with yours and sends your group's code in an easy-to-crack form. " +
+                    "Ask them to update, then make a new group with a strong code.", true));
                 lastProfile = null;
                 UpdateMyProfile();
                 lan.Start();
-                Msg("Sharing on as " + Nick + ". Looking for players on your network...", false);
+                string weak = Profile.WeakCode(GroupCode);
+                string since; settings.TryGetValue("codeSince", out since);
+                if (since == null)
+                    // Set before 1.10.2: older versions sent this code over the network in a form
+                    // that's quick to crack, so someone may have it.
+                    Msg("Sharing on as " + Nick + ". Your group's code was used by an older version of the app, which sent it in an easy-to-crack form: " +
+                        "once everyone has updated, create a new group (it suggests a strong code) and give your friends the new code.", true);
+                else if (weak != null)
+                    Msg("Sharing on as " + Nick + ". Your group's code is short and easy to guess: for better safety, create a new group (it suggests a strong code).", true);
+                else
+                    Msg("Sharing on as " + Nick + ". Looking for players on your network...", false);
             }
             catch (Exception ex)
             {
@@ -95,19 +116,50 @@ namespace QGSCompanion
             try { BeginInvoke(a); } catch (InvalidOperationException) { }
         }
 
+        // At most this many players per group, and in all (the ones heard longest ago make room).
+        public const int MaxPeersPerGroup = 64;
+
         void OnPeer(PeerData p, string raw)
         {
             if (p.Id == PeerId || Forgotten().Contains(p.Id)) return;
-            try { SharedStore.Save(p.Id, raw, p.Group); } catch { }
             PeerData old;
             peers.TryGetValue(p.Id, out old);
+            // New here (or new to this group): make room, or turn them away if everyone there is online.
+            // (Not fetched again until their data changes, so a full group isn't downloaded over and over.)
+            if ((old == null || old.Group != p.Group) && !MakeRoomForPeer(p.Id, p.Group)) return;
+            try { SharedStore.Save(p, p.Group); } catch { }
             int before = old == null ? 0 : old.Chains.Count;
             peers[p.Id] = p;
-            Reload();
+            // Many players' data arriving at once is loaded in one go, a moment later.
+            if (uiTest) Reload(); else { debounce.Stop(); debounce.Start(); }
             int added = p.Chains.Count - before;
             Msg(old == null ? p.Nick + " joined - " + Plural(p.Chains.Count, "chain") + " shared."
                 : added > 0 ? p.Nick + " shared " + Plural(added, "new chain") + "." : p.Nick + "'s stats updated.", false);
             RefreshGroupBar();
+        }
+
+        // A new player is coming: if their group (or everyone together) is at the limit, the player
+        // heard longest ago is dropped (forgotten from disk too, but not blocked: their data is fetched
+        // again when they're next heard). Players online now are never dropped; if everyone is
+        // online, the newcomer isn't kept (false).
+        bool MakeRoomForPeer(string id, string group)
+        {
+            return DropOldest(peers.Values.Where(x => x.Id != id && x.Group == group).ToList(), MaxPeersPerGroup) &&
+                   DropOldest(peers.Values.Where(x => x.Id != id).ToList(), SharedStore.MaxStored);
+        }
+
+        bool DropOldest(List<PeerData> pool, int limit)
+        {
+            while (pool.Count >= limit)
+            {
+                var oldest = pool.Where(x => !PeerOnline(x.Id)).OrderBy(x => PeerSeen(x)).FirstOrDefault();
+                if (oldest == null) return false;
+                pool.Remove(oldest);
+                peers.Remove(oldest.Id);
+                SharedStore.Forget(oldest.Id);
+                if (lan != null) lan.ForgetVersion(oldest.Id);
+            }
+            return true;
         }
 
         // ------------------------------------------------------------------
@@ -119,11 +171,15 @@ namespace QGSCompanion
             var outp = new List<ChainRow>(mine);
             var have = new FactionSet();
             foreach (var r in mine) have.Add(r.Key, r.Faction);
+            int share = SharePerPeer(), total = 0;
             foreach (var p in peers.Values.OrderByDescending(x => x.LastSeen))
+            {
+                int fromThem = 0;
                 foreach (var c in p.Chains.Values)
                     foreach (bool dun in new[] { false, true })
                     {
                         if (dun ? !c.HasDungeon : !c.HasGear) continue;
+                        if (fromThem >= share || total >= MaxSharedRows) break;
                         string key = c.Key + (dun ? "#D" : "#G"), f = KeepTag(c, dun, addon.Discovered);
                         bool both = Starter.IsBoth(c);
                         // A Horde chain and an Alliance chain from the same giver are two different rows.
@@ -136,9 +192,15 @@ namespace QGSCompanion
                         bool added = d != null;
                         have.Add(key, f);
                         outp.Add(new ChainRow { Starter = c, IsDungeon = dun, Status = added ? ChainRow.InDiscoveries : ChainRow.Shared, From = p.Nick, Faction = f, Both = both });
+                        fromThem++; total++;
                     }
+            }
             return outp;
         }
+
+        // Every player gets a fair share of the shared chains (so one sending thousands can't crowd
+        // out the others), and there are at most MaxSharedRows in all.
+        int SharePerPeer() { return Math.Max(500, MaxSharedRows / Math.Max(1, peers.Count)); }
 
         static string ChainFaction(Starter c) { string f = c.Get("faction"); return f == "A" || f == "H" ? f : null; }
 
@@ -184,11 +246,15 @@ namespace QGSCompanion
         {
             var list = new List<ChainRow>();
             var have = new FactionSet();
+            int share = SharePerPeer();
             foreach (var p in peers.Values.OrderByDescending(x => x.LastSeen))
+            {
+                int fromThem = 0;
                 foreach (var c in p.Chains.Values)
                     foreach (bool dun in new[] { false, true })
                     {
                         if (dun ? !c.HasDungeon : !c.HasGear) continue;
+                        if (fromThem >= share) break;
                         string key = c.Key + (dun ? "#D" : "#G"), f = KeepTag(c, dun, addon.Discovered);
                         bool both = Starter.IsBoth(c);
                         string kb;
@@ -197,9 +263,15 @@ namespace QGSCompanion
                         if (both ? have.HasExact(key, null) : have.Covers(key, f)) continue;
                         have.Add(key, f);
                         list.Add(new ChainRow { Starter = c, IsDungeon = dun, Faction = f, Both = both });
+                        fromThem++;
+                        // Shared.lua stays a sensible size for the game, whatever players send.
+                        if (list.Count >= MaxSharedRows) return list;
                     }
+            }
             return list;
         }
+
+        public const int MaxSharedRows = 20000;
 
         // After each reload: refresh Shared.lua for the game, and what we tell other players.
         void AfterReloadSharing()
@@ -576,7 +648,7 @@ namespace QGSCompanion
                 string origName = GroupName, origCode = GroupCode;
                 var nameB = new TextBox { Text = origName, Location = new Point(S(250), S(173)), Width = S(200), MaxLength = 24 };
                 var codeL = new Label { Text = "Group code (agree it with your friends):", AutoSize = true, Location = new Point(S(24), S(210)) };
-                var codeB = new TextBox { Text = GroupCode, Location = new Point(S(250), S(207)), Width = S(200), MaxLength = 40, UseSystemPasswordChar = true };
+                var codeB = new TextBox { Text = GroupCode, Location = new Point(S(250), S(207)), Width = S(200), MaxLength = 60, UseSystemPasswordChar = true };
                 var show = new CheckBox { Text = "Show", AutoSize = true, Location = new Point(S(460), S(209)) };
                 show.CheckedChanged += (s, e) => codeB.UseSystemPasswordChar = !show.Checked;
                 var note = new Label { ForeColor = Pal.Sub, AutoSize = false, Location = new Point(S(24), S(240)), Size = new Size(S(532), S(46)),
@@ -648,6 +720,7 @@ namespace QGSCompanion
                     if (renamed || newCode) SetGroupNameSetting(gn, gn == "" ? 0 : LanShare.UnixNow());
                     settings["shareOn"] = on.Checked ? "1" : "0";
                     settings["nick"] = n;
+                    if (newCode) settings["codeSince"] = "1.10.2";
                     settings["groupCode"] = c;
                     SaveSettings();
                     StartSharing();
@@ -682,6 +755,8 @@ namespace QGSCompanion
             var p = Profile.Parse(payload);
             if (p != null) { p.LastSeen = DateTime.Now; p.Group = Profile.GroupHash(GroupCode); OnPeer(p, payload); }
         }
+        internal int TestPeersInGroup() { string g = Profile.GroupHash(GroupCode); return peers.Values.Count(p => p.Group == g); }
+        internal int TestStoredPeers() { return Directory.Exists(SharedStore.Dir) ? Directory.GetFiles(SharedStore.Dir, "*.txt").Length : 0; }
         internal void TestFaction(string f) { factionView = f; UpdateFactionPill(); Fill(); }
         internal string TestFactions() { return learned.Factions.Count == 0 ? "none recorded (shows everything)" : string.Join("+", learned.Factions.ToArray()); }
         internal string TestPlayers()

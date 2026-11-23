@@ -582,12 +582,13 @@ namespace QGSCompanion
         internal Form BuildCreateDialog()
         {
             return GroupDialog("Create group", "Create a local group",
-                "Players on your network will see the group's name. Only people you give the code to can join, so pick one that's hard to guess (a few words is good).",
+                "Players nearby see the name; only people you give the code to can join. A strong code is filled in for you.",
                 true, "Create", (name, nick, code) =>
                 {
                     if (name == "") return "Give your group a name.";
                     if (nick == "") return "Pick a nickname first (it's what the others see).";
-                    if (code.Length < 4) return "Use a code of at least 4 characters (a few words is best).";
+                    string weak = Profile.WeakCode(code);
+                    if (weak != null) return weak + " Someone on your network could guess a short code.";
                     var list = nearby.Snapshot(DateTime.UtcNow);
                     var clash = list.FirstOrDefault(x => Profile.CodeMatches(code, x.Hash));
                     if (clash != null)
@@ -606,7 +607,7 @@ namespace QGSCompanion
         {
             var f = new Form { Text = caption, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
                 StartPosition = FormStartPosition.CenterParent, BackColor = Pal.Card, ForeColor = Pal.Text, Font = fBody, ShowInTaskbar = false };
-            int x0 = S(24), fx = S(156), width = S(460), y = S(16);
+            int x0 = S(24), fx = S(156), width = S(560), y = S(16);
             var titleL = new Label { Text = title, Font = fBig, AutoSize = false, AutoEllipsis = true, UseMnemonic = false, Location = new Point(x0, y), Size = new Size(width - x0 * 2, S(30)) };
             y += S(36);
             var introL = new Label { Text = intro, ForeColor = Pal.Sub, AutoSize = false, UseMnemonic = false, Location = new Point(x0, y), Size = new Size(width - x0 * 2, S(40)) };
@@ -625,7 +626,9 @@ namespace QGSCompanion
             controls.Add(nickB);
             y += S(34);
             controls.Add(new Label { Text = "Group code:", AutoSize = true, Location = new Point(x0, y + S(3)) });
-            var codeB = new TextBox { Location = new Point(fx, y), Width = width - fx - x0 - S(70), MaxLength = 40, UseSystemPasswordChar = !askName };
+            // Creating a group: a strong random code is filled in (four words and a number).
+            var codeB = new TextBox { Location = new Point(fx, y), Width = width - fx - x0 - S(70), MaxLength = 60, UseSystemPasswordChar = !askName,
+                Text = askName ? Profile.SuggestCode() : "" };
             var show = new CheckBox { Text = "Show", AutoSize = true, Checked = askName, Location = new Point(codeB.Right + S(10), y + S(2)) };
             show.CheckedChanged += (s, e) => codeB.UseSystemPasswordChar = !show.Checked;
             controls.Add(codeB); controls.Add(show);
@@ -671,6 +674,7 @@ namespace QGSCompanion
             settings["shareOn"] = "1";
             settings["nick"] = Profile.CleanNick(nick);
             settings["groupCode"] = code.Trim();
+            settings["codeSince"] = "1.10.2";   // set with this version (see StartSharing)
             SetGroupNameSetting(name, name == "" ? 0 : namedAt);
             SaveSettings();
             StartSharing();

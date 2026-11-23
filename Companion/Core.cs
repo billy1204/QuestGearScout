@@ -383,6 +383,8 @@ namespace QGSCompanion
         public string From;     // for Shared rows: the nickname of the player who shared it
         public bool Both;       // seen by both factions: for everyone for sure (Faction is null); a copy
                                 // tagged for one faction is replaced when it's added
+        public bool KeepApart;  // Faction null: never written into an entry tagged for one faction (but,
+                                // unlike Both, doesn't take that faction's copy away)
         // Unique per chain: a giver's Horde and Alliance (or neutral) versions are different rows.
         public string Key { get { return Starter.Key + (IsDungeon ? "#D" : "#G") + (Faction != null ? "|" + Faction : ""); } }
 
@@ -417,7 +419,12 @@ namespace QGSCompanion
                 string k;
                 Starter s = Target(outp, r.Starter.Key, r.Faction, r.IsDungeon, out k, played);
                 // Seen by both factions: never into an entry tagged for one faction (that's another chain).
-                if (r.Both && r.Faction == null && s != null && Starter.Tag(s) != null) { s = null; k = FreeKey(outp, r.Starter.Key, null); }
+                if ((r.Both || r.KeepApart) && r.Faction == null && s != null && Starter.Tag(s) != null)
+                {
+                    // The giver's neutral entry if there is one (one per giver, or the file keeps only one), else a new one.
+                    var n = Starter.Entries(outp, r.Starter.Key).FirstOrDefault(e => Starter.Tag(e.Value) == null);
+                    if (n.Value != null) { s = n.Value; k = n.Key; } else { s = null; k = FreeKey(outp, r.Starter.Key, null); }
+                }
                 bool made = s == null;
                 if (made)
                 {
@@ -754,6 +761,18 @@ namespace QGSCompanion
         // reward quest is "B"), neutral; not known (recorded before 1.9.0), everyone's. "X" when
         // the first quest is one faction's and the reward the other's (no faction can do the
         // whole chain): such a chain is skipped.
+        // Every chain learned, each on its own (the Starters above keep only the best one per giver,
+        // faction and gear/dungeon): id "C:123#G:456|H" (giver, gear or dungeon, first quest, faction:
+        // A, H, B = both factions have seen it, N = not known).
+        readonly Dictionary<string, Starter> chains = new Dictionary<string, Starter>();
+        readonly Dictionary<string, bool> chainBoth = new Dictionary<string, bool>();
+
+        public List<KeyValuePair<string, ChainRow>> AllChains()
+        {
+            return chains.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => new KeyValuePair<string, ChainRow>(kv.Key,
+                new ChainRow { Starter = kv.Value, IsDungeon = kv.Key.Contains("#D:"), Faction = Starter.Tag(kv.Value), Both = chainBoth[kv.Key] })).ToList();
+        }
+
         // Marks (not written to any file) on a learned starter whose gear / dungeon chain both
         // factions have seen.
         public const string BothGear = "_bothG", BothDungeon = "_bothD";
@@ -845,6 +864,43 @@ namespace QGSCompanion
                 if (faction == "X") continue;   // no single faction can do it (a wrong link)
                 // Seen by both factions: for everyone for sure (not just "faction unknown").
                 bool both = V(rec(root), "faction") as string == "B" || V(q, "faction") as string == "B";
+                // Every chain on its own too (giver, gear or dungeon, first quest, faction), for the
+                // learned-chains archive: a giver can have several chains.
+                foreach (bool dun in new[] { false, true })
+                {
+                    if (dun ? !isDungeon : !gear) continue;
+                    string cid = key + (dun ? "#D:" : "#G:") + root + "|" + (faction ?? (both ? "B" : "N"));
+                    Starter c;
+                    if (!res.chains.TryGetValue(cid, out c))
+                    {
+                        c = new Starter();
+                        c.F["kind"] = V(giver, "kind"); c.F["id"] = (double)L(V(giver, "id")).Value;
+                        c.F["map"] = V(giver, "map"); c.F["x"] = V(giver, "x"); c.F["y"] = V(giver, "y");
+                        c.F["name"] = V(giver, "name");
+                        if (faction != null) c.F["faction"] = faction;
+                        res.chains[cid] = c;
+                        res.chainBoth[cid] = both;
+                    }
+                    if (dun)
+                    {
+                        double? ds = c.Num("dungeonSteps");
+                        if (!ds.HasValue || step < ds.Value)
+                        {
+                            c.F["dungeonSteps"] = (double)step; c.F["dungeonName"] = dName; c.F["dungeonTitle"] = V(q, "title");
+                            c.F["dRoot"] = (double)root; c.F["dRootTitle"] = titleOf(root);
+                        }
+                    }
+                    else
+                    {
+                        double? cq = c.Num("quality"), cs = c.Num("steps");
+                        if (!cq.HasValue || quality > cq.Value || (quality == cq.Value && step < cs.Value))
+                        {
+                            c.F["quality"] = quality; c.F["steps"] = (double)step;
+                            c.F["item"] = V(q, "item"); c.F["finalTitle"] = V(q, "title");
+                            c.F["rootQuest"] = (double)root; c.F["rootTitle"] = titleOf(root);
+                        }
+                    }
+                }
                 // One starter per giver and faction, so each chain keeps its own faction (a giver's
                 // Horde gear chain and its neutral dungeon chain stay apart).
                 string sk = key;
