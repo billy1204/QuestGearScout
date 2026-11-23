@@ -2,7 +2,7 @@
 ## Title: QuestGearScout
 ## Notes: Alerts you near NPCs and objects that start quest chains ending in Uncommon-or-better gear or leading to dungeon quests.
 ## Author: QuestGearScout
-## Version: 1.9.0
+## Version: 1.10.0
 ## SavedVariables: QuestGearScoutDB
 ## IconTexture: Interface\Icons\INV_Misc_Map_01
 ## Category: Quests
