@@ -13,7 +13,7 @@ A World of Warcraft: Forever addon that alerts you near NPCs and objects that st
 No install needed; it uses the C# compiler that ships with Windows. From this folder:
 
 ```powershell
-& "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ /out:Companion\bin\QuestGearScoutCompanion.exe /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll Companion\Core.cs Companion\Ui.cs Companion\AddonCheck.cs Companion\CheckerForm.cs Companion\Progress.cs Companion\Lan.cs Companion\LanTest.cs Companion\Sharing.cs Companion\MainForm.cs
+& "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ /out:Companion\bin\QuestGearScoutCompanion.exe /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll Companion\Core.cs Companion\Ui.cs Companion\AddonCheck.cs Companion\CheckerForm.cs Companion\Progress.cs Companion\Lan.cs Companion\LanTest.cs Companion\Sharing.cs Companion\GroupBar.cs Companion\PlayerChains.cs Companion\MainForm.cs
 ```
 
 Self-tests: `QuestGearScoutCompanion.exe --lantest out.txt` (local sharing) and `--uitest` (the window; see the Companion README).

@@ -294,6 +294,65 @@ namespace QGSCompanion
             return null;
         }
 
+        // A giver can have up to four entries: the plain key, and key|A, key|H, key|N for further
+        // entries of other factions. The tag that matters is the entry's own "faction" field.
+        public static string Tag(Starter s) { string f = s.Get("faction"); return f == "A" || f == "H" ? f : null; }
+        // "B" only travels between Companion apps (a player's chain that both factions have seen:
+        // for everyone, for sure); it's never written to the addon's files. Untagged = for everyone,
+        // or recorded before factions were saved.
+        public static bool IsBoth(Starter s) { return s.Get("faction") == "B"; }
+        public static string FactionKey(Starter s) { return IsBoth(s) ? "B" : Tag(s); }
+        public bool Holds(bool dungeon) { return dungeon ? HasDungeon : HasGear; }
+
+        public static List<KeyValuePair<string, Starter>> Entries(Dictionary<string, Starter> d, string key)
+        {
+            var list = new List<KeyValuePair<string, Starter>>();
+            foreach (string k in new[] { key, AltKey(key, "A"), AltKey(key, "H"), AltKey(key, null) })
+            {
+                Starter s;
+                if (d.TryGetValue(k, out s)) list.Add(new KeyValuePair<string, Starter>(k, s));
+            }
+            // Entries Pack added this session under a numbered key (see ChainRow.Target).
+            foreach (var kv in d) if (kv.Key.StartsWith(key + "|#", StringComparison.Ordinal)) list.Add(kv);
+            return list;
+        }
+
+        // The entry holding this giver's gear (or dungeon) chain for `faction`: one tagged for that
+        // faction, else an untagged (neutral) one. For an untagged faction: a neutral one, else any.
+        // `k` is its key. Reading, Pack and Unpack all use this, so they always agree.
+        // For an untagged faction, after a neutral entry: one tagged for a faction in `prefer` (the
+        // ones you play), then - only when `anySide` - any entry holding the chain.
+        public static Starter Locate(Dictionary<string, Starter> d, string key, string faction, bool dungeon, out string k, ICollection<string> prefer, bool anySide)
+        {
+            var holders = Entries(d, key).Where(e => e.Value.Holds(dungeon)).ToList();
+            var hit = holders.FirstOrDefault(e => Tag(e.Value) == faction);
+            if (hit.Value == null && faction != null) hit = holders.FirstOrDefault(e => Tag(e.Value) == null);
+            if (hit.Value == null && faction == null && prefer != null) hit = holders.FirstOrDefault(e => prefer.Contains(Tag(e.Value)));
+            if (hit.Value == null && faction == null && anySide) hit = holders.FirstOrDefault();
+            k = hit.Key;
+            return hit.Value;
+        }
+
+        public static Starter Locate(Dictionary<string, Starter> d, string key, string faction, bool dungeon, out string k)
+        {
+            return Locate(d, key, faction, dungeon, out k, null, true);
+        }
+
+        public static Starter Locate(Dictionary<string, Starter> d, string key, string faction, bool dungeon)
+        {
+            string k;
+            return Locate(d, key, faction, dungeon, out k, null, true);
+        }
+
+        // Is the chain built in (or in `d`) for a player of `played`? A chain without a faction
+        // counts only when an entry for one of those factions (or a neutral one) holds it.
+        public static Starter LocateFor(Dictionary<string, Starter> d, string key, string faction, bool dungeon, ICollection<string> played)
+        {
+            string k;
+            bool any = played == null || played.Count == 0;
+            return Locate(d, key, faction, dungeon, out k, any ? null : played, any);
+        }
+
         public Starter Clone()
         {
             return new Starter { F = new Dictionary<string, object>(F) };
@@ -322,7 +381,10 @@ namespace QGSCompanion
         public string Status;   // one of the constants above
         public string Faction;  // "A", "H", or null for both / unknown
         public string From;     // for Shared rows: the nickname of the player who shared it
-        public string Key { get { return Starter.Key + (IsDungeon ? "#D" : "#G"); } }
+        public bool Both;       // seen by both factions: for everyone for sure (Faction is null); a copy
+                                // tagged for one faction is replaced when it's added
+        // Unique per chain: a giver's Horde and Alliance (or neutral) versions are different rows.
+        public string Key { get { return Starter.Key + (IsDungeon ? "#D" : "#G") + (Faction != null ? "|" + Faction : ""); } }
 
         public int StatusRank { get { return Status == New ? 0 : Status == Shared ? 1 : Status == InDiscoveries ? 2 : Status == Unknown ? 3 : 4; } }
 
@@ -334,21 +396,30 @@ namespace QGSCompanion
 
         // Rows -> starters holding only the chosen chains (a gear row doesn't
         // drag the same giver's dungeon chain along). Merges into a copy of 'into'.
-        public static Dictionary<string, Starter> Pack(IEnumerable<ChainRow> chosen, Dictionary<string, Starter> into)
+        // `played`: the factions you play (kept for callers; a neutral chain is only re-tagged when
+        // the other faction has its own copy, see Target).
+        public static Dictionary<string, Starter> Pack(IEnumerable<ChainRow> chosen, Dictionary<string, Starter> into, ICollection<string> played = null)
         {
             var outp = into == null ? new Dictionary<string, Starter>() : Starter.CloneAll(into);
             foreach (var r in chosen)
             {
-                string k = r.Starter.Key;
-                Starter s;
-                if (outp.TryGetValue(k, out s) && s.Get("faction") != r.Faction && (r.IsDungeon ? s.HasGear : s.HasDungeon))
+                if (r.Both && r.Faction == null)
                 {
-                    // The entry already holds this giver's other chain for a different faction (or for
-                    // everyone): a separate entry, so neither chain shows up for the wrong faction.
-                    k = Starter.AltKey(k, r.Faction);
-                    outp.TryGetValue(k, out s);
+                    // Seen by both factions: a copy tagged for one faction is taken out, and the chain
+                    // goes into a neutral entry (that faction's other chain, if any, stays tagged).
+                    foreach (var e in Starter.Entries(outp, r.Starter.Key))
+                        if (Starter.Tag(e.Value) != null && e.Value.Holds(r.IsDungeon) && SameChain(e.Value, r.Starter, r.IsDungeon))
+                        {
+                            foreach (string f in r.IsDungeon ? Starter.DungeonFields : Starter.GearFields) e.Value.F.Remove(f);
+                            if (!e.Value.HasGear && !e.Value.HasDungeon) outp.Remove(e.Key);
+                        }
                 }
-                if (s == null)
+                string k;
+                Starter s = Target(outp, r.Starter.Key, r.Faction, r.IsDungeon, out k, played);
+                // Seen by both factions: never into an entry tagged for one faction (that's another chain).
+                if (r.Both && r.Faction == null && s != null && Starter.Tag(s) != null) { s = null; k = FreeKey(outp, r.Starter.Key, null); }
+                bool made = s == null;
+                if (made)
                 {
                     s = new Starter();
                     foreach (string f in Starter.BaseFields) if (r.Starter.F.ContainsKey(f)) s.F[f] = r.Starter.F[f];
@@ -358,10 +429,61 @@ namespace QGSCompanion
                 {
                     if (r.Starter.F.ContainsKey(f)) s.F[f] = r.Starter.F[f]; else s.F.Remove(f);
                 }
-                // The row's faction wins (also updates entries written before factions were known).
-                if (r.Faction != null) s.F["faction"] = r.Faction; else s.F.Remove("faction");
+                // The row's faction wins (also tags entries written before factions were known). A row
+                // without one never takes a tag away: a faction's chain never becomes everyone's.
+                if (r.Faction != null) s.F["faction"] = r.Faction;
+                else if (made) s.F.Remove("faction");
             }
             return outp;
+        }
+
+        // The entry in 'into' that Pack writes a row (giver `key`, `faction`, gear or dungeon) to, or
+        // null if it makes a new one under key `k`. Never two entries of one faction for a giver (the
+        // file keeps only one of them), and never a chain under another faction's tag:
+        //  - for a faction: the entry already tagged for it, else a neutral entry holding just this
+        //    chain when the other faction has its own copy (it gets the tag), else a new entry;
+        //  - without a faction: the neutral entry holding this chain, else a tagged one holding it
+        //    (its tag is kept), else any neutral entry, else a new one.
+        public static Starter Target(Dictionary<string, Starter> into, string key, string faction, bool dungeon, out string k, ICollection<string> played = null)
+        {
+            var es = Starter.Entries(into, key);
+            KeyValuePair<string, Starter> hit;
+            if (faction != null)
+            {
+                hit = es.FirstOrDefault(e => Starter.Tag(e.Value) == faction);
+                // A neutral entry is only re-tagged when the other faction already has its own copy;
+                // otherwise players of the other faction may still need it, so a new entry is made.
+                string other = faction == "A" ? "H" : "A";
+                bool otherCovered = es.Any(e => Starter.Tag(e.Value) == other && e.Value.Holds(dungeon));
+                if (hit.Value == null && otherCovered)
+                    hit = es.FirstOrDefault(e => Starter.Tag(e.Value) == null && e.Value.Holds(dungeon) && !e.Value.Holds(!dungeon));
+            }
+            else
+            {
+                hit = es.FirstOrDefault(e => Starter.Tag(e.Value) == null && e.Value.Holds(dungeon));
+                if (hit.Value == null) hit = es.FirstOrDefault(e => e.Value.Holds(dungeon));
+                if (hit.Value == null) hit = es.FirstOrDefault(e => Starter.Tag(e.Value) == null);
+            }
+            if (hit.Value != null) { k = hit.Key; return hit.Value; }
+            k = FreeKey(into, key, faction);
+            return null;
+        }
+
+        // A key for a new entry of this giver that doesn't write over another entry.
+        static string FreeKey(Dictionary<string, Starter> into, string key, string faction)
+        {
+            string k = !into.ContainsKey(key) ? key : Starter.AltKey(key, faction);
+            for (int n = 2; into.ContainsKey(k); n++) k = key + "|#" + n;
+            return k;
+        }
+
+        // Is it the same chain (same first quest)? A giver can give one faction a different chain.
+        // Not known (no first quest recorded) counts as different, so nothing is replaced by mistake.
+        public static bool SameChain(Starter a, Starter b, bool dungeon)
+        {
+            string f = dungeon ? "dRoot" : "rootQuest";
+            double? x = a.Num(f), y = b.Num(f);
+            return x.HasValue && y.HasValue && x.Value == y.Value;
         }
 
         // Removes the chosen halves (gear or dungeon) from a copy of 'from'.
@@ -370,11 +492,10 @@ namespace QGSCompanion
             var outp = Starter.CloneAll(from);
             foreach (var r in chosen)
             {
-                string k = r.Starter.Key;
-                Starter s;
-                if (outp.TryGetValue(k, out s) && !Starter.SameSide(s.Get("faction"), r.Faction) && outp.ContainsKey(Starter.AltKey(k, r.Faction)))
-                    k = Starter.AltKey(k, r.Faction);
-                if (!outp.TryGetValue(k, out s)) continue;
+                // The same entry the list shows the row from (see Starter.Locate).
+                string k;
+                Starter s = Starter.Locate(outp, r.Starter.Key, r.Faction, r.IsDungeon, out k);
+                if (s == null) continue;
                 foreach (string f in r.IsDungeon ? Starter.DungeonFields : Starter.GearFields) s.F.Remove(f);
                 if (!s.HasGear && !s.HasDungeon) outp.Remove(k);
             }
@@ -464,6 +585,12 @@ namespace QGSCompanion
             string body = Starter.Encode(starters);
             if (body.Contains("]=") || body.Contains("]]")) throw new InvalidDataException("Refusing to write chain data that could break out of the Lua string.");
             return body;
+        }
+
+        // The chains in the text of a Discoveries.lua file (empty if it isn't one).
+        public static Dictionary<string, Starter> DiscoveriesIn(string lua)
+        {
+            return Starter.Decode(ExportIn(lua ?? "", "DISCOVERED_EXPORT"));
         }
 
         public static string DiscoveriesText(IEnumerable<Starter> starters)
@@ -622,6 +749,23 @@ namespace QGSCompanion
             return f == "A" || f == "H" ? f : null;
         }
 
+        // A learned chain's faction, the same rule as the addon (QGS.ChainFaction): learned by one
+        // faction, that faction's; once the other faction has seen it (its first quest or its
+        // reward quest is "B"), neutral; not known (recorded before 1.9.0), everyone's. "X" when
+        // the first quest is one faction's and the reward the other's (no faction can do the
+        // whole chain): such a chain is skipped.
+        // Marks (not written to any file) on a learned starter whose gear / dungeon chain both
+        // factions have seen.
+        public const string BothGear = "_bothG", BothDungeon = "_bothD";
+
+        public static string ChainFaction(object rootFaction, object questFaction)
+        {
+            if (rootFaction as string == "B" || questFaction as string == "B") return null;
+            string rf = OneFaction(rootFaction), qf = OneFaction(questFaction);
+            if (rf != null && qf != null && rf != qf) return "X";
+            return qf;   // a reward recorded before factions were saved stays everyone's
+        }
+
         static Dictionary<object, object> T(Dictionary<object, object> t, object k)
         {
             object v; return t != null && t.TryGetValue(k, out v) ? v as Dictionary<object, object> : null;
@@ -697,20 +841,28 @@ namespace QGSCompanion
                 if (!gear && !isDungeon) continue;
 
                 string key = (V(giver, "kind") as string) + ":" + L(V(giver, "id"));
-                // The chain's faction: the faction of the characters that took its first quest (else this one).
-                object rf = V(rec(root), "faction");
-                string faction = rf != null ? OneFaction(rf) : OneFaction(V(q, "faction"));
+                string faction = ChainFaction(V(rec(root), "faction"), V(q, "faction"));
+                if (faction == "X") continue;   // no single faction can do it (a wrong link)
+                // Seen by both factions: for everyone for sure (not just "faction unknown").
+                bool both = V(rec(root), "faction") as string == "B" || V(q, "faction") as string == "B";
+                // One starter per giver and faction, so each chain keeps its own faction (a giver's
+                // Horde gear chain and its neutral dungeon chain stay apart).
+                string sk = key;
                 Starter s;
-                if (!res.Starters.TryGetValue(key, out s))
+                if (res.Starters.TryGetValue(sk, out s) && Starter.Tag(s) != faction)
+                {
+                    sk = Starter.AltKey(key, faction);
+                    res.Starters.TryGetValue(sk, out s);
+                }
+                if (s == null)
                 {
                     s = new Starter();
                     s.F["kind"] = V(giver, "kind"); s.F["id"] = (double)L(V(giver, "id")).Value;
                     s.F["map"] = V(giver, "map"); s.F["x"] = V(giver, "x"); s.F["y"] = V(giver, "y");
                     s.F["name"] = V(giver, "name");
                     if (faction != null) s.F["faction"] = faction;
-                    res.Starters[key] = s;
+                    res.Starters[sk] = s;
                 }
-                else if (s.Get("faction") != faction) s.F.Remove("faction");   // gear and dungeon chains differ: both
                 if (gear)
                 {
                     double? cq = s.Num("quality"), cs = s.Num("steps");
@@ -719,6 +871,7 @@ namespace QGSCompanion
                         s.F["quality"] = quality; s.F["steps"] = (double)step;
                         s.F["item"] = V(q, "item"); s.F["finalTitle"] = V(q, "title");
                         s.F["rootQuest"] = (double)root; s.F["rootTitle"] = titleOf(root);
+                        if (both) s.F[BothGear] = true; else s.F.Remove(BothGear);
                     }
                 }
                 if (isDungeon)
@@ -729,6 +882,7 @@ namespace QGSCompanion
                         s.F["dungeonSteps"] = (double)step; s.F["dungeonName"] = dName;
                         s.F["dungeonTitle"] = V(q, "title");
                         s.F["dRoot"] = (double)root; s.F["dRootTitle"] = titleOf(root);
+                        if (both) s.F[BothDungeon] = true; else s.F.Remove(BothDungeon);
                     }
                 }
             }
@@ -744,15 +898,21 @@ namespace QGSCompanion
                 foreach (bool dun in new[] { false, true })
                 {
                     if (dun ? !s.HasDungeon : !s.HasGear) continue;
-                    string mine = s.Get("faction");
-                    Starter b = Starter.Find(data.BuiltIn, s.Key, mine), dsc = Starter.Find(data.Discovered, s.Key, mine);
+                    string mine = Starter.Tag(s);
+                    bool both = s.F.ContainsKey(dun ? BothDungeon : BothGear);
+                    string kb, kd;
+                    // Untagged (older records): prefer the copy for a faction you play. Seen by both
+                    // factions: only a copy for everyone counts (one tagged for a single faction is
+                    // out of date, so the chain shows as New and Add to addon makes it everyone's).
+                    Starter b = Starter.Locate(data.BuiltIn, s.Key, mine, dun, out kb, both ? null : Factions, !both),
+                            dsc = Starter.Locate(data.Discovered, s.Key, mine, dun, out kd, both ? null : Factions, !both);
                     // Without the addon we can't tell what's new, so don't claim it is.
                     string status = data.Found ? ChainRow.New : ChainRow.Unknown;
                     if (b != null && (dun ? b.HasDungeon : b.HasGear)) status = ChainRow.BuiltIn;
                     else if (dsc != null && (dun ? dsc.HasDungeon : dsc.HasGear)) status = ChainRow.InDiscoveries;
                     // Faction: what you recorded, else what Discoveries.lua or the built-in data says.
-                    string f = mine ?? (dsc != null ? dsc.Get("faction") : null) ?? (b != null ? b.Get("faction") : null);
-                    rows.Add(new ChainRow { Starter = s, IsDungeon = dun, Status = status, Faction = f == "A" || f == "H" ? f : null });
+                    string f = both ? null : mine ?? (dsc != null ? dsc.Get("faction") : null) ?? (b != null ? b.Get("faction") : null);
+                    rows.Add(new ChainRow { Starter = s, IsDungeon = dun, Status = status, Faction = f == "A" || f == "H" ? f : null, Both = both });
                 }
             }
             return rows;

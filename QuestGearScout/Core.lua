@@ -174,6 +174,7 @@ function QGS.Rebuild()
 
     local function offer(s, src)
         if not s then return end
+        if s.faction == "X" then return end   -- learned chain no single faction can do
         if s.faction and myFaction and s.faction ~= myFaction then return end
         if s.classes and myClass and not ("," .. s.classes .. ","):find("," .. myClass .. ",", 1, true) then return end
         local gearOK = s.quality and s.quality >= minQ
@@ -190,13 +191,22 @@ function QGS.Rebuild()
         if gearOK and (not cur.quality or s.quality > cur.quality
                 or (s.quality == cur.quality and (s.steps or 1) < (cur.steps or 1))) then
             for _, k in ipairs(GEAR_FIELDS) do cur[k] = s[k] end
+            cur.gearFaction = s.faction or false
             changed = true
         end
         if dunOK and (not cur.dungeonSteps or s.dungeonSteps < cur.dungeonSteps) then
             for _, k in ipairs(DUN_FIELDS) do cur[k] = s[k] end
+            cur.dunFaction = s.faction or false
             changed = true
         end
         if changed then
+            -- Each chain keeps its own faction (a giver's gear chain can be Horde-only while its
+            -- dungeon chain is for everyone). The giver's faction is the one both share, if any.
+            local gf, df = cur.gearFaction, cur.dunFaction
+            if cur.quality and cur.dungeonSteps then cur.faction = (gf == df) and gf or nil
+            elseif cur.quality then cur.faction = gf
+            else cur.faction = df end
+            cur.faction = cur.faction or nil
             cur.name = s.name or cur.name
             cur.map, cur.x, cur.y = s.map, s.x, s.y
             source[key] = src
@@ -209,13 +219,23 @@ function QGS.Rebuild()
     for _, s in pairs(ns.shared or {}) do offer(s, "shared") end
     for _, s in pairs(db.imported) do offer(s, "imported") end
 
-    -- Which faction a learned chain belongs to: the faction of the characters that did it.
-    -- "B" (done on both factions) or unknown (data from before 1.9.0) means everyone sees it.
+    -- Which faction a learned chain belongs to: the faction of the characters that saw it.
+    --  - learned by one faction: that faction's (a Horde chain is listed as Horde);
+    --  - once a character of the other faction sees the chain (its first quest or its reward
+    --    quest; each quest notes "B" when both factions have seen it): neutral, for everyone;
+    --  - not known (recorded before 1.9.0): everyone's, as before;
+    --  - first quest seen only by Alliance and reward only by Horde (or the other way round): no
+    --    faction can do the whole chain (a wrong link), so it's "X" and never shown.
     local function chainFaction(root, q)
-        local f = root.faction or q.faction
-        if f == "A" or f == "H" then return f end
-        return nil
+        if root.faction == "B" or q.faction == "B" then return nil end
+        local rf = (root.faction == "A" or root.faction == "H") and root.faction or nil
+        local qf = (q.faction == "A" or q.faction == "H") and q.faction or nil
+        if rf and qf and rf ~= qf then return "X" end
+        -- The reward quest's faction (a reward recorded before factions were saved stays
+        -- everyone's, even if the first quest has one).
+        return qf
     end
+    QGS.ChainFaction = chainFaction
 
     local lengths, dungeonQuests = {}, 0
     for qid, q in pairs(db.quests) do
@@ -315,7 +335,8 @@ function QGS.ChainPos(qid)
     local root = quests[rootID]
     if not (root and root.title) then
         local b = bq[rootID]
-        root = { title = (root and root.title) or (b and b[2] ~= "" and b[2]) or nil, giver = root and root.giver }
+        root = { title = (root and root.title) or (b and b[2] ~= "" and b[2]) or nil, giver = root and root.giver,
+                 faction = root and root.faction }
     end
     return rootID, root, step
 end
@@ -370,6 +391,30 @@ local function noteFaction(q)
     elseif q.faction ~= f and q.faction ~= "B" then q.faction = "B" end
 end
 
+-- Quests this character has done (or has in its log) were taken by its faction: fill that in
+-- for quests recorded before factions were saved, or picked up without the quest window.
+-- Returns how many quests got a faction they didn't have.
+local function questDone(qid)
+    if C_QuestLog and C_QuestLog.IsQuestFlaggedCompleted then return C_QuestLog.IsQuestFlaggedCompleted(qid) end
+    if IsQuestFlaggedCompleted then return IsQuestFlaggedCompleted(qid) end
+    return false
+end
+
+function QGS.BackfillFactions()
+    local db = QuestGearScoutDB
+    if not (db and db.quests) or not QGS.PlayerFaction() then return 0 end
+    local n = 0
+    for qid, q in pairs(db.quests) do
+        if type(qid) == "number" and type(q) == "table" then
+            local before = q.faction
+            local ok, did = pcall(questDone, qid)
+            if (ok and did) or (QGS.IsOnQuest and QGS.IsOnQuest(qid)) then noteFaction(q) end
+            if q.faction ~= before then n = n + 1 end
+        end
+    end
+    return n
+end
+
 -- Per-character info for the Companion app's stats (faction, class, level).
 local function noteCharacter()
     local db = QuestGearScoutDB
@@ -395,6 +440,7 @@ end
 -- Learned from progress / turn-in inside a dungeon: record it and say so.
 function QGS.MarkDungeon(qid, name)
     local q = questRecord(qid)
+    noteFaction(q)
     if not setDungeon(q, name) then return false end
     QGS.Rebuild()
     if not QuestGearScoutDB.settings.dungeons then return true end
@@ -529,6 +575,9 @@ local function onComplete()
     if not qid or qid == 0 then return end
     local q = questRecord(qid)
     q.title = q.title or (GetTitleText and GetTitleText())
+    local before = q.faction
+    noteFaction(q)   -- also for quests picked up without the quest window (auto-accepted, shared)
+    if q.faction ~= before then QGS.Rebuild() end
     local quality, link = scanRewards()
     if quality > (q.quality or -1) then q.quality, q.item = quality, link end
     local giver = currentGiver()
@@ -541,6 +590,9 @@ local function onTurnedIn(qid)
     local inst = QGS.CurrentInstance()
     if inst then QGS.MarkDungeon(qid, inst) end
     local q = QuestGearScoutDB.quests[qid]
+    local before = q and q.faction
+    if q then noteFaction(q) end
+    if q and q.faction ~= before and (q.quality or -1) < QuestGearScoutDB.settings.minQuality then QGS.Rebuild() end
     if q and (q.quality or -1) >= QuestGearScoutDB.settings.minQuality then
         QGS.Rebuild()
         local s = QGS.StarterForQuest((QGS.ChainPos(qid)))
@@ -596,12 +648,22 @@ end
 local function scanProgress()
     local inst = QGS.CurrentInstance()
     local now = {}
+    local quests = QuestGearScoutDB.quests
+    local factionChanged = false
     eachLogQuest(function(qid, index, isComplete)
+        -- A quest in this character's log was taken by its faction.
+        local q = quests[qid]
+        if q then
+            local before = q.faction
+            noteFaction(q)
+            if q.faction ~= before then factionChanged = true end
+        end
         local p = progressOf(qid, index, isComplete)
         if inst and progress[qid] and progress[qid] ~= p then QGS.MarkDungeon(qid, inst) end
         now[qid] = p
     end)
     progress = now
+    if factionChanged then QGS.Rebuild() end   -- e.g. a chain both factions have now seen turns neutral
 end
 QGS.ScanProgress = scanProgress
 
@@ -614,11 +676,15 @@ f:RegisterEvent("QUEST_TURNED_IN")
 f:RegisterEvent("QUEST_LOG_UPDATE")
 f:RegisterEvent("PLAYER_ENTERING_WORLD")
 f:RegisterEvent("PLAYER_LOGIN")
+-- A character that starts without a faction (a Pandaren on its starting island) picks one later.
+pcall(f.RegisterEvent, f, "NEUTRAL_FACTION_SELECT_RESULT")
 f:SetScript("OnEvent", function(_, event, a1, a2)
-    if event == "PLAYER_LOGIN" then
-        -- Faction and class are certain now; filter the built-in and shared chains by them.
+    if event == "PLAYER_LOGIN" or event == "NEUTRAL_FACTION_SELECT_RESULT" then
+        -- Faction and class are certain now: remember this character's faction (and on the quests
+        -- it has done), and filter the built-in and shared chains by them.
         if QuestGearScoutDB then
             pcall(noteCharacter)
+            pcall(QGS.BackfillFactions)
             QGS.Rebuild()
         end
         return

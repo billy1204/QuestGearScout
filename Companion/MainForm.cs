@@ -123,6 +123,7 @@ namespace QGSCompanion
             BuildBanner();
             BuildToolbar();
             BuildBody();
+            BuildGroupBar();
             BuildPlayers();
             BuildFilters();
             BuildFirstRun();
@@ -687,6 +688,7 @@ namespace QGSCompanion
             Item(publishMenu, "Check addon...", "", () => ShowChecker(false));
             Item(publishMenu, "Local sharing...", "", ShowSharing);
             Item(publishMenu, "Save share file...", "", SaveExport);
+            Item(publishMenu, "Restore points...", "", ShowRestorePoints);
             publishMenu.Items.Add(new ToolStripSeparator());
             var oAddon = Item(publishMenu, "Open addon folder", "", () => OpenFolder(AddonDir));
             var oSaved = Item(publishMenu, "Open saved game data folder", "", () => { string p = SavedVarsPath(); OpenFolder(p == null ? null : Path.GetDirectoryName(p)); });
@@ -1027,6 +1029,7 @@ namespace QGSCompanion
                 else
                 {
                     header.Invalidate();
+                    groupBar.Invalidate();
                     // Online dots and "seen 3 min ago" change over time.
                     if (view == "players") { playersList.Invalidate(); detail.Invalidate(); footer.Invalidate(); lblShowing.Text = PlayersCountText(); }
                 }
@@ -2146,13 +2149,21 @@ namespace QGSCompanion
             }
         }
 
-        void WriteWithBackup(IEnumerable<Starter> starters)
+        // Every change to Discoveries.lua goes through here: a restore point of how it was (in
+        // Documents\QuestGearScout\Data; nothing is changed if that can't be saved), the backup
+        // for Undo, the write, then a restore point of the new state. `did` says what changed.
+        bool WriteWithBackup(IEnumerable<Starter> starters, string did)
         {
+            var list = starters.ToList();
+            if (!RestorePointBefore(did)) return false;
             string b = AddonData.Backup(AddonDir);
-            AddonData.WriteDiscoveries(AddonDir, starters);
+            // Set before writing: if the write fails partway, Undo still puts back the file as it was.
             lastBackup = b;
             lastBackupDir = AddonDir;
             lastBackupTime = DateTime.Now;
+            AddonData.WriteDiscoveries(AddonDir, list);
+            RestorePointAfter(did);
+            return true;
         }
 
         Dictionary<string, Starter> FreshDiscovered() { return AddonData.Load(AddonDir).Discovered; }
@@ -2173,7 +2184,8 @@ namespace QGSCompanion
             string body = "Add these to the addon?\n\n" + ListLines(adds, "New:", ups, "Update (added before):", Describe) +
                 "\nThey're written to Discoveries.lua, load in game after /reload, and go out with your next release. A backup is kept, so you can undo.";
             if (!Confirm(body)) return;
-            WriteWithBackup(ChainRow.Pack(adds.Concat(ups), FreshDiscovered()).Values);
+            if (!WriteWithBackup(ChainRow.Pack(adds.Concat(ups), FreshDiscovered(), learned.Factions).Values,
+                "Added " + Plural(adds.Count, "chain") + (ups.Count > 0 ? ", updated " + ups.Count : ""))) return;
             Reload();
             Msg("Added " + Plural(adds.Count, "chain") + (ups.Count > 0 ? ", updated " + ups.Count : "") + ". Type /reload in game to check.", false);
         }
@@ -2188,7 +2200,7 @@ namespace QGSCompanion
             string body = "Remove these from the addon?\n\n" + ListLines(chosen, "Remove:", new List<ChainRow>(), "",
                 r => Giver(r.Starter) + " - " + (r.IsDungeon ? "dungeon chain" : "gear chain")) + "\nA backup is kept, so you can undo.";
             if (!Confirm(body)) return;
-            WriteWithBackup(ChainRow.Unpack(chosen, FreshDiscovered()).Values);
+            if (!WriteWithBackup(ChainRow.Unpack(chosen, FreshDiscovered()).Values, "Removed " + Plural(chosen.Count, "chain"))) return;
             Reload();
             Msg("Removed " + Plural(chosen.Count, "chain") + " from the addon.", false);
         }
@@ -2207,12 +2219,15 @@ namespace QGSCompanion
             }
             if (!Confirm("Undo your last change to the addon (made at " + lastBackupTime.ToString("t", CultureInfo.CurrentCulture) + ")?")) return;
             string restore = lastBackup;
+            const string did = "Undid the last change";
+            if (!RestorePointBefore(did)) return;
             AddonData.Backup(lastBackupDir);
             string target = Path.Combine(lastBackupDir, "Discoveries.lua");
             File.Copy(restore, target, true);
             // A copy keeps the backup's old time; mark it changed now so the banner and Publish see it.
             try { File.SetLastWriteTime(target, DateTime.Now); } catch { }
             lastBackup = null;
+            RestorePointAfter(did);
             Reload();
             Msg("Undone. Type /reload in game to load it.", false);
         }
@@ -2657,6 +2672,7 @@ namespace QGSCompanion
             if (args.Length == 4 && args[0] == "--uitest")
             {
                 AppPaths.Root = args[3];
+                RestorePoints.Root = Path.Combine(Path.Combine(Path.Combine(args[3], "Documents"), "QuestGearScout"), "Data");
                 return UiTest(args[1], args[2]);
             }
             Application.Run(new MainForm());
@@ -2750,6 +2766,76 @@ namespace QGSCompanion
             f.TestDialogShot(f.BuildPublishDialog(), Path.Combine(shots, "shot-14-publish.png"));
             f.TestDialogShot(Theme.BuildBox("Built QuestGearScout-1.9.1.zip (11 files).\n\nUpload it on CurseForge: your project > Files > Upload File.\n\nOpen the folder?",
                 "QuestGearScout Companion", MessageBoxButtons.YesNo, MessageBoxIcon.Information), Path.Combine(shots, "shot-15-message.png"));
+
+            // ---- the "Local group" sidebar ----
+            f.TestView("notebook");
+            log.Append("== group panel: not in a group, not looking yet\n").Append(f.TestGroupBar());
+            f.TestFindGroups();
+            log.Append("== group panel: looking, nobody around\n").Append(f.TestGroupBar());
+            f.TestNearby("gnomes42", "Gnome Guild", 3);
+            f.TestNearby("ironforge regulars", "Ironforge Irregulars", 1);
+            f.TestNearby("old app group", null, 2);
+            log.Append("== group panel: three groups nearby\n").Append(f.TestGroupBar());
+            Shot(f, Path.Combine(shots, "shot-16-groups.png"));
+            var gnomes = f.TestNearbyGroup("Gnome Guild");
+            f.TestDialogShot(f.BuildJoinDialog(gnomes), Path.Combine(shots, "shot-17-join.png"));
+            f.TestDialogShot(f.BuildCreateDialog(), Path.Combine(shots, "shot-18-create.png"));
+            log.Append("== create: name taken nearby: ").Append(f.TestDialog(f.BuildCreateDialog(), "gnome guild", "Tester", "something else")).Append('\n');
+            log.Append("== create: code already used nearby: ").Append(f.TestDialog(f.BuildCreateDialog(), "My Crew", "Tester", " Gnomes42")).Append('\n');
+            log.Append("== create: code too short: ").Append(f.TestDialog(f.BuildCreateDialog(), "My Crew", "Tester", "abc")).Append('\n');
+            log.Append("== join Gnome Guild, no nickname: ").Append(f.TestDialog(f.BuildJoinDialog(gnomes), "", "", "gnomes42")).Append('\n');
+            log.Append("== join Gnome Guild, wrong code: ").Append(f.TestDialog(f.BuildJoinDialog(gnomes), "", "Tester", "orcs99")).Append('\n');
+            log.Append("== join Gnome Guild, right code typed differently: ").Append(f.TestDialog(f.BuildJoinDialog(gnomes), "", "Tester", " GNOMES42 ")).Append('\n');
+            log.Append("== group panel: just joined (the name comes from its players, signed, once online)\n").Append(f.TestGroupBar());
+            f.TestPeerInGroup(payload("dddddddddddddddddddddddddddddddd", "Gnomey", new PlayerStats { Gear = 4, Factions = "A", Known = 4, Possible = 320 },
+                new[] { row("C", 90004, "Gnome Tinker", "A", 3), row("C", 90005, "Wandering Fisher", null, 2), row("C", 90006, "Horde Spymaster", "H", 4) }));
+            Application.DoEvents();
+            log.Append("== group panel: a Gnome Guild player shared (Hordie and Allyson were from before, so not listed)\n").Append(f.TestGroupBar());
+            Shot(f, Path.Combine(shots, "shot-19-joined.png"));
+
+            // ---- clicking a player: their chains, Update, restore points ----
+            log.Append("== Gnomey's chains (factions known: " + f.TestFactions() + "): ").Append(f.TestOffers("Gnomey")).Append('\n');
+            f.TestDialogShot(f.TestPlayerDialog("Gnomey"), Path.Combine(shots, "shot-21-player.png"));
+            log.Append("== restore points before any change\n").Append(f.TestRestorePoints());
+            log.Append("== Update (all ticked): ").Append(f.TestGetChains("Gnomey")).Append('\n');
+            log.Append("== Gnomey's chains after: ").Append(f.TestOffers("Gnomey")).Append('\n');
+            log.Append("== restore points\n").Append(f.TestRestorePoints());
+            log.Append("== group panel after getting them\n").Append(f.TestGroupBar());
+            // Gnomey finds a better reward for the Tinker: it shows as an update.
+            f.TestPeerInGroup(payload("dddddddddddddddddddddddddddddddd", "Gnomey", new PlayerStats { Gear = 5, Factions = "A", Known = 5, Possible = 320 },
+                new[] { row("C", 90004, "Gnome Tinker", "A", 4), row("C", 90005, "Wandering Fisher", null, 2), row("C", 90006, "Horde Spymaster", "H", 4) }));
+            Application.DoEvents();
+            log.Append("== Gnomey changed a chain: ").Append(f.TestOffers("Gnomey")).Append('\n');
+            log.Append("== group panel with an update waiting\n").Append(f.TestGroupBar());
+            log.Append("== Update again: ").Append(f.TestGetChains("Gnomey")).Append('\n');
+            log.Append("== restore points\n").Append(f.TestRestorePoints());
+            f.TestDialogShot(f.BuildRestoreDialog(), Path.Combine(shots, "shot-22-restore.png"));
+            log.Append("== restore the newest (already like that): ").Append(f.TestRestore(0)).Append('\n');
+            log.Append("== restore none picked: ").Append(f.TestRestore(-1)).Append('\n');
+            log.Append("== restore the oldest (before anything was got): ").Append(f.TestRestore(f.TestRestoreCount() - 1)).Append('\n');
+            log.Append("== Gnomey's chains after restoring: ").Append(f.TestOffers("Gnomey")).Append('\n');
+            log.Append("== restore points\n").Append(f.TestRestorePoints());
+            log.Append("== restore the point before that (the one with the update): ").Append(f.TestRestore(1)).Append('\n');
+            log.Append("== Gnomey's chains now: ").Append(f.TestOffers("Gnomey")).Append('\n');
+            log.Append("== undo (Ctrl+Z) after a restore: ");
+            f.TestUndo(); log.Append(string.Join(" || ", f.testConfirms.ToArray())).Append(" | ").Append(f.TestOffers("Gnomey")).Append('\n');
+            f.testConfirms.Clear();
+            log.Append("== restore points\n").Append(f.TestRestorePoints());
+            f.TestSize(900, 600); Application.DoEvents();
+            log.Append("== group panel at 900 wide\n").Append(f.TestGroupBar());
+            Shot(f, Path.Combine(shots, "shot-20-strip.png"));
+            f.TestSize(1200, 460); Application.DoEvents();
+            log.Append("== group panel on a wide but short window\n").Append(f.TestGroupBar());
+            f.TestSize(1024, 640); Application.DoEvents();
+            log.Append("== leave group: ").Append(f.TestLeaveGroup()).Append('\n');
+            log.Append("== group panel when listening failed\n").Append(f.TestScanFailed());
+            log.Append("== join with a code (no list): ").Append(f.TestDialog(f.BuildJoinDialog(null), "", "Tester", "ironforge regulars")).Append('\n');
+            log.Append("== group panel: joined by code\n").Append(f.TestGroupBar());
+            log.Append("== leave again: ").Append(f.TestLeaveGroup()).Append('\n');
+            log.Append("== create a new group: ").Append(f.TestDialog(f.BuildCreateDialog(), "My Crew", "Tester", "dragons and gnomes")).Append('\n');
+            log.Append("== group panel: in My Crew\n").Append(f.TestGroupBar());
+            log.Append("== leave My Crew: ").Append(f.TestLeaveGroup()).Append('\n');
+
             f.TestView("notebook");
             f.TestFaction("H"); Application.DoEvents();
             log.Append("== faction filter: Horde only\n").Append(f.TestDump());

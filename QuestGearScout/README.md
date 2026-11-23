@@ -16,6 +16,8 @@ What it learns is saved for your whole account, so your alts get alerts for chai
 ## Horde and Alliance
 Since 1.9.0 every chain QuestGearScout learns remembers which faction did it. A Horde character only gets alerts for Horde chains and neutral ones, and an Alliance character only for Alliance and neutral ones. A chain done on both factions counts as neutral.
 
+The faction is saved with each quest whenever your character sees it: in the quest window, on accepting, on turning in, and while it's in your quest log. At login, quests recorded before factions were saved get the faction of each character that has done them. A chain learned by a Horde character is listed as Horde; as soon as an Alliance character sees it in game (its first quest or its reward quest), it becomes neutral and shows for both factions. The same works the other way round. A quest giver's gear chain and dungeon chain each keep their own faction, also in `/qgs export` (it then shares them as two lines). The Companion app reads the same information, so its faction filter and local sharing match the game.
+
 ## Sharing on your home network
 With the **QuestGearScout Companion** app, friends on the same local network with the same group code share the chains they've found and compare ranks and achievements. Shared chains are kept in `Shared.lua`, apart from your own data, and load in game after `/reload`. Each character still only sees its own faction's chains.
 

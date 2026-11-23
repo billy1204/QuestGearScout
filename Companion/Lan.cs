@@ -7,6 +7,11 @@
 //   * When an app sees a beacon from the same group with a data version it hasn't got yet, it
 //     connects to that player's TCP port and asks for their profile: nickname, stats and the
 //     chains they learned themselves (with Horde/Alliance marked).
+//   * A group with a name also announces it ("QGSC2G|<group hash>|<player id>|<time>|<named at>|<name>|<sig>")
+//     so players who aren't in a group yet can see it in the "Local group" sidebar. They still need
+//     the code to join: the app checks the code they type against the group's hash. Only members
+//     can check the signature; they take a newer signed name, so a rename reaches everyone.
+//     A listen-only engine (no group) only hears these; it sends nothing.
 //   * Everything received is treated as untrusted: sizes are capped and every field is checked.
 //   * What each player last sent is kept in %APPDATA%\QuestGearScoutCompanion\shared, so the
 //     leaderboard and shared chains are still there when they're offline.
@@ -34,6 +39,7 @@ namespace QGSCompanion
         public Dictionary<string, Starter> Chains = new Dictionary<string, Starter>();
         public DateTime LastSeen;
         public string Address = "";
+        public string Group = "";   // hash of the group they were heard in ("" if not known, e.g. saved by an older version)
     }
 
     public static class Profile
@@ -73,6 +79,15 @@ namespace QGSCompanion
         }
 
         public static bool IsId(string s) { return s != null && Regex.IsMatch(s, "^[0-9a-f]{32}$"); }
+
+        // Whether a code belongs to the group with this public hash (as heard in its beacons).
+        public static bool CodeMatches(string code, string groupHash)
+        {
+            return groupHash != null && (code ?? "").Trim().Length > 0 && GroupHash(code) == groupHash;
+        }
+
+        // Group names follow the nickname rules (they're shown to everyone on the network).
+        public static string CleanGroupName(string s) { return CleanNick(s); }
 
         // Nicknames: printable, no separators, at most 24 characters.
         public static string CleanNick(string s)
@@ -120,7 +135,7 @@ namespace QGSCompanion
             num("dRoot", 1, 1e9); num("dungeonSteps", 1, 60);
             text("dungeonName", 80); text("dungeonTitle", 120); text("dRootTitle", 120);
             string f = s.Get("faction");
-            if (f == "A" || f == "H") o.F["faction"] = f;
+            if (f == "A" || f == "H" || f == "B") o.F["faction"] = f;   // "B": seen by both factions (for everyone)
             string cls = s.Get("classes");
             if (cls != null && Regex.IsMatch(cls, "^[A-Z]{2,15}(,[A-Z]{2,15}){0,12}$")) o.F["classes"] = cls;
             if (!o.HasGear && !o.HasDungeon) return null;
@@ -165,7 +180,18 @@ namespace QGSCompanion
             {
                 if (++n > MaxChains) break;
                 var clean = Sanitize(kv.Value);
-                if (clean != null) p.Chains[clean.Key] = clean;
+                // One entry per giver and faction (as cleaned): a giver's Horde entry and Alliance entry
+                // both stay; a second one for the same faction is dropped.
+                if (clean == null) continue;
+                string ck = clean.Key;
+                Starter first;
+                if (p.Chains.TryGetValue(ck, out first))
+                {
+                    if (Starter.FactionKey(first) == Starter.FactionKey(clean)) continue;
+                    ck = Starter.AltKey(clean.Key, Starter.FactionKey(clean));
+                    if (p.Chains.ContainsKey(ck)) continue;
+                }
+                p.Chains[ck] = clean;
             }
             p.Stats.Id = p.Id; p.Stats.Nick = p.Nick;
             return p;
@@ -183,11 +209,13 @@ namespace QGSCompanion
     {
         public static string Dir { get { return Path.Combine(AppPaths.Root, "shared"); } }
 
-        public static void Save(string id, string payload)
+        // group: the hash of the group they were heard in ("" if unknown), kept next to it in <id>.grp.
+        public static void Save(string id, string payload, string group)
         {
             if (!Profile.IsId(id)) return;
             Directory.CreateDirectory(Dir);
             File.WriteAllText(Path.Combine(Dir, id + ".txt"), payload, new UTF8Encoding(false));
+            if (Profile.IsId(group)) File.WriteAllText(Path.Combine(Dir, id + ".grp"), group, new UTF8Encoding(false));
         }
 
         public static List<PeerData> LoadAll()
@@ -204,6 +232,12 @@ namespace QGSCompanion
                         var p = Profile.Parse(File.ReadAllText(f));
                         if (p == null || p.Id + ".txt" != Path.GetFileName(f)) continue;
                         p.LastSeen = File.GetLastWriteTime(f);
+                        string gf = Path.Combine(Dir, p.Id + ".grp");
+                        if (File.Exists(gf) && new FileInfo(gf).Length < 100)
+                        {
+                            string grp = File.ReadAllText(gf).Trim();
+                            if (Profile.IsId(grp)) p.Group = grp;
+                        }
                         outp.Add(p);
                     }
                     catch { }
@@ -217,7 +251,108 @@ namespace QGSCompanion
         {
             if (!Profile.IsId(id)) return;
             try { File.Delete(Path.Combine(Dir, id + ".txt")); } catch { }
+            try { File.Delete(Path.Combine(Dir, id + ".grp")); } catch { }
         }
+    }
+
+    // A group someone on the network is sharing in, as seen from outside it.
+    public class NearbyGroup
+    {
+        public string Hash = "", Name;   // Name is null for groups from apps that don't announce one
+        public int Online;
+    }
+
+    // Groups heard on the local network: their public hash, the names their players announce and
+    // who's in them. Nothing here is signed (we don't know their codes), so it's only a label for
+    // the list: joining needs the code, and a joiner never takes the name from here (it waits for a
+    // name signed with the code). Each player counts once; the name most of a group's online
+    // players announce is shown (newest rename on a tie), so one player can't make it flicker.
+    // Thread-safe.
+    public class GroupDirectory
+    {
+        public const int MaxGroups = 64, MaxMembers = 64;
+        public int OnlineSeconds = 30;
+
+        class Said { public string Name; public long NamedAt; }
+        class Entry
+        {
+            public readonly Dictionary<string, DateTime> Members = new Dictionary<string, DateTime>();
+            public readonly Dictionary<string, Said> Names = new Dictionary<string, Said>();   // per player
+        }
+        readonly Dictionary<string, Entry> groups = new Dictionary<string, Entry>();
+        readonly object gate = new object();
+
+        // Records a beacon (name null) or a name announcement. Returns true when it's worth
+        // redrawing for (a new group, a new player in a group, or a player's name changed).
+        public bool Heard(string hash, string member, string name, long namedAt, DateTime nowUtc)
+        {
+            if (!Profile.IsId(hash) || !Profile.IsId(member)) return false;
+            if (name != null) { name = Profile.CleanGroupName(name); if (name == "") name = null; }
+            lock (gate)
+            {
+                Prune(nowUtc);
+                Entry e;
+                bool news = false;
+                if (!groups.TryGetValue(hash, out e))
+                {
+                    if (groups.Count >= MaxGroups) return false;
+                    groups[hash] = e = new Entry();
+                    news = true;
+                }
+                if (!e.Members.ContainsKey(member))
+                {
+                    if (e.Members.Count >= MaxMembers) return news;
+                    news = true;
+                }
+                e.Members[member] = nowUtc;
+                if (name != null)
+                {
+                    Said old;
+                    if (!e.Names.TryGetValue(member, out old) || old.Name != name) news = true;
+                    e.Names[member] = new Said { Name = name, NamedAt = namedAt };
+                }
+                return news;
+            }
+        }
+
+        void Prune(DateTime nowUtc)
+        {
+            foreach (var g in groups.ToList())
+            {
+                foreach (var m in g.Value.Members.Where(kv => (nowUtc - kv.Value).TotalSeconds > OnlineSeconds * 2).Select(kv => kv.Key).ToList())
+                {
+                    g.Value.Members.Remove(m);
+                    g.Value.Names.Remove(m);
+                }
+                if (g.Value.Members.Count == 0) groups.Remove(g.Key);
+            }
+        }
+
+        string ShownName(Entry e, DateTime nowUtc)
+        {
+            var best = e.Names.Where(kv => (nowUtc - e.Members[kv.Key]).TotalSeconds <= OnlineSeconds)
+                .GroupBy(kv => kv.Value.Name)
+                .Select(gr => new { Name = gr.Key, Count = gr.Count(), Newest = gr.Max(kv => kv.Value.NamedAt) })
+                .OrderByDescending(x => x.Count).ThenByDescending(x => x.Newest).ThenBy(x => x.Name, StringComparer.Ordinal)
+                .FirstOrDefault();
+            return best == null ? null : best.Name;
+        }
+
+        // Groups with someone online right now, busiest first.
+        public List<NearbyGroup> Snapshot(DateTime nowUtc)
+        {
+            lock (gate)
+            {
+                Prune(nowUtc);
+                return groups.Select(kv => new NearbyGroup { Hash = kv.Key, Name = ShownName(kv.Value, nowUtc),
+                        Online = kv.Value.Members.Count(m => (nowUtc - m.Value).TotalSeconds <= OnlineSeconds) })
+                    .Where(g => g.Online > 0)
+                    .OrderByDescending(g => g.Online).ThenBy(g => g.Name ?? "￿", StringComparer.OrdinalIgnoreCase).ThenBy(g => g.Hash, StringComparer.Ordinal)
+                    .ToList();
+            }
+        }
+
+        public void Clear() { lock (gate) groups.Clear(); }
     }
 
     public class LanShare : IDisposable
@@ -228,9 +363,10 @@ namespace QGSCompanion
         public int BeaconMs = 5000;
         public bool BroadcastBeacons = true;
 
-        public readonly string Id, Group;
+        public readonly string Id, Group;   // Group is null for a listen-only engine
         readonly byte[] key;
-        string nick = "", payload = "", version = "";
+        string nick = "", payload = "", version = "", groupName = "";
+        long groupNamedAt;
         readonly object gate = new object();
         UdpClient udp;
         TcpListener tcp;
@@ -245,10 +381,32 @@ namespace QGSCompanion
         // Raised on a background thread when a player's beacon is heard (id, nick, address).
         public event Action<string, string, string> PeerSeen;
         public event Action<string> Problem;
+        // Raised on a background thread for every beacon or group-name announcement heard, from any
+        // group: (group hash, player id, announced group name or null, when that name was chosen
+        // (unix time), signed with our own code). Only "signed" can be trusted; the rest is just
+        // for showing which groups are nearby.
+        public event Action<string, string, string, long, bool> GroupHeard;
 
         public LanShare(string id, string groupCode)
         {
             Id = id; Group = Profile.GroupHash(groupCode); key = Profile.GroupKey(groupCode);
+        }
+
+        // Listen-only: hears which groups are on the network, sends nothing and shares nothing.
+        public LanShare(string id)
+        {
+            Id = id; Group = null; key = null;
+        }
+
+        public bool ListenOnly { get { return Group == null; } }
+
+        // The group's name, announced to the network next to the beacons ("" announces nothing),
+        // and when it was chosen (unix time): members who hear a newer signed name take it.
+        public string GroupName { get { lock (gate) return groupName; } }
+        public long GroupNamedAt { get { lock (gate) return groupNamedAt; } }
+        public void SetGroupName(string name, long namedAt)
+        {
+            lock (gate) { groupName = Profile.CleanGroupName(name); groupNamedAt = Math.Max(0, namedAt); }
         }
 
         static string Nonce()
@@ -267,14 +425,18 @@ namespace QGSCompanion
 
         public void Start()
         {
-            tcp = new TcpListener(Bind, 0);
-            tcp.Start();
-            tcpPort = ((IPEndPoint)tcp.LocalEndpoint).Port;
+            if (!ListenOnly)
+            {
+                tcp = new TcpListener(Bind, 0);
+                tcp.Start();
+                tcpPort = ((IPEndPoint)tcp.LocalEndpoint).Port;
+            }
             udp = new UdpClient();
             udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             udp.EnableBroadcast = true;
             udp.Client.Bind(new IPEndPoint(Bind, UdpPort));
             new Thread(ReceiveLoop) { IsBackground = true, Name = "qgsc-udp" }.Start();
+            if (ListenOnly) return;
             new Thread(BeaconLoop) { IsBackground = true, Name = "qgsc-beacon" }.Start();
             new Thread(AcceptLoop) { IsBackground = true, Name = "qgsc-tcp" }.Start();
         }
@@ -309,7 +471,7 @@ namespace QGSCompanion
         readonly HashSet<string> ignored = new HashSet<string>();
         public void Ignore(string id) { lock (gate) { ignored.Add(id); fetchedVersion.Remove(id); } }
 
-        static long UnixNow() { return (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds; }
+        public static long UnixNow() { return (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds; }
 
         // Reads one line (up to max bytes) or returns null.
         static string ReadLine(Stream s, int max)
@@ -356,14 +518,24 @@ namespace QGSCompanion
             {
                 // Signed with the group key and timestamped: apps without the code can't fake or
                 // (after a few minutes) replay a beacon to make us connect to them.
-                string body;
-                lock (gate) body = Group + "|" + Id + "|" + tcpPort + "|" + version + "|" + UnixNow() + "|" + nick;
+                string body, gname;
+                long gat;
+                lock (gate) { body = Group + "|" + Id + "|" + tcpPort + "|" + version + "|" + UnixNow() + "|" + nick; gname = groupName; gat = groupNamedAt; }
                 string msg = "QGSC2|" + body + "|" + Profile.Sign(key, "beacon|" + body);
-                byte[] data = Encoding.UTF8.GetBytes(msg);
-                foreach (var t in Targets())
+                var packets = new List<byte[]> { Encoding.UTF8.GetBytes(msg) };
+                // The group's name, for players who aren't in it yet and for members who don't have
+                // the newest name: "QGSC2G|group|id|unix time|named at|name|signature".
+                // Older apps ignore it (it isn't a QGSC2 beacon).
+                if (gname != "")
                 {
-                    try { udp.Send(data, data.Length, t); } catch { }
+                    string gbody = Group + "|" + Id + "|" + UnixNow() + "|" + gat + "|" + gname;
+                    packets.Add(Encoding.UTF8.GetBytes("QGSC2G|" + gbody + "|" + Profile.Sign(key, "group|" + gbody)));
                 }
+                foreach (var t in Targets())
+                    foreach (byte[] data in packets)
+                    {
+                        try { udp.Send(data, data.Length, t); } catch { }
+                    }
                 for (int i = 0; i < BeaconMs / 100 && !stopping; i++) Thread.Sleep(100);
             }
         }
@@ -378,9 +550,13 @@ namespace QGSCompanion
                 catch (ObjectDisposedException) { return; }
                 catch (SocketException) { if (stopping) return; continue; }
                 if (data.Length > 700) continue;
-                // QGSC2|group|id|port|version|unix time|nick|signature
                 string[] p = Encoding.UTF8.GetString(data).Split('|');
-                if (p.Length != 8 || p[0] != "QGSC2" || p[1] != Group || !Profile.IsId(p[2]) || p[2] == Id) continue;
+                if (p.Length == 7 && p[0] == "QGSC2G") { HeardName(p); continue; }
+                // QGSC2|group|id|port|version|unix time|nick|signature
+                if (p.Length != 8 || p[0] != "QGSC2" || !Profile.IsId(p[1]) || !Profile.IsId(p[2]) || p[2] == Id) continue;
+                long when;
+                if (long.TryParse(p[5], out when) && Math.Abs(UnixNow() - when) <= 300) RaiseGroupHeard(p[1], p[2], null, 0, false);
+                if (p[1] != Group) continue;
                 int port;
                 if (!int.TryParse(p[3], out port) || port < 1 || port > 65535) continue;
                 string ver = p[4];
@@ -410,6 +586,30 @@ namespace QGSCompanion
                     ThreadPool.QueueUserWorkItem(_ => Fetch(peer, addr, port, ver));
                 }
             }
+        }
+
+        void RaiseGroupHeard(string group, string peer, string name, long namedAt, bool signed)
+        {
+            var h = GroupHeard;
+            if (h != null) try { h(group, peer, name, namedAt, signed); } catch { }
+        }
+
+        // "QGSC2G|group|id|unix time|named at|name|signature": a group announcing its name.
+        void HeardName(string[] p)
+        {
+            if (!Profile.IsId(p[1]) || !Profile.IsId(p[2]) || p[2] == Id) return;
+            long ts, at;
+            long now = UnixNow();
+            if (!long.TryParse(p[3], out ts) || Math.Abs(now - ts) > 300) return;
+            // When the name was chosen: never in the future (so nobody can pin a name forever).
+            if (!long.TryParse(p[4], out at) || at < 0 || at > now + 300) return;
+            string name = Profile.CleanGroupName(p[5]);
+            if (name == "" || name != p[5]) return;
+            // Only members (who have the code) can check the signature; for everyone else it's just a label.
+            bool signed = Group != null && p[1] == Group &&
+                Profile.SameSig(p[6], Profile.Sign(key, "group|" + p[1] + "|" + p[2] + "|" + p[3] + "|" + p[4] + "|" + p[5]));
+            lock (gate) if (ignored.Contains(p[2])) return;
+            RaiseGroupHeard(p[1], p[2], name, at, signed);
         }
 
         // ------------------------------------------------------------------

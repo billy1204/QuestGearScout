@@ -162,6 +162,18 @@ namespace QGSCompanion
                         g.DrawArc(p, x + s * 0.22f, y + s * 0.26f, s * 0.60f, s * 0.52f, 200, 250);
                         g.DrawLines(p, new[] { new PointF(x + s * 0.14f, y + s * 0.30f), new PointF(x + s * 0.26f, y + s * 0.50f), new PointF(x + s * 0.44f, y + s * 0.38f) });
                         break;
+                    case "group":
+                        g.DrawEllipse(p, x + s * 0.20f, y + s * 0.18f, s * 0.26f, s * 0.26f);
+                        g.DrawArc(p, x + s * 0.08f, y + s * 0.52f, s * 0.50f, s * 0.50f, 180, 180);
+                        g.DrawEllipse(p, x + s * 0.56f, y + s * 0.26f, s * 0.22f, s * 0.22f);
+                        g.DrawArc(p, x + s * 0.48f, y + s * 0.56f, s * 0.42f, s * 0.42f, 200, 140);
+                        break;
+                    case "chevron-right":
+                        g.DrawLines(p, new[] { new PointF(x + s * 0.38f, y + s * 0.22f), new PointF(x + s * 0.66f, y + s * 0.50f), new PointF(x + s * 0.38f, y + s * 0.78f) });
+                        break;
+                    case "chevron-left":
+                        g.DrawLines(p, new[] { new PointF(x + s * 0.62f, y + s * 0.22f), new PointF(x + s * 0.34f, y + s * 0.50f), new PointF(x + s * 0.62f, y + s * 0.78f) });
+                        break;
                     case "folder":
                         g.DrawLines(p, new[] { new PointF(x + s * 0.12f, y + s * 0.78f), new PointF(x + s * 0.12f, y + s * 0.24f), new PointF(x + s * 0.40f, y + s * 0.24f),
                             new PointF(x + s * 0.48f, y + s * 0.34f), new PointF(x + s * 0.88f, y + s * 0.34f), new PointF(x + s * 0.88f, y + s * 0.78f), new PointF(x + s * 0.12f, y + s * 0.78f) });

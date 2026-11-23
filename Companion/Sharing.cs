@@ -49,17 +49,23 @@ namespace QGSCompanion
             foreach (var p in SharedStore.LoadAll()) if (p.Id != PeerId && !fg.Contains(p.Id)) peers[p.Id] = p;
             if (peers.Count > 0) Reload();
             if (!uiTest) StartSharing();
+            RefreshGroupBar();
         }
 
         void StartSharing()
         {
             StopSharing();
-            if (!SharingOn || Nick == "" || GroupCode.Trim().Length < 4) { header.Invalidate(); return; }
+            // The self-test never opens network connections.
+            if (uiTest || !InGroup) { StartScout(); header.Invalidate(); RefreshGroupBar(); return; }
             try
             {
-                lan = new LanShare(PeerId, GroupCode);
-                foreach (string id in Forgotten()) lan.Ignore(id);
-                lan.PeerData += (p, raw) => OnUi(() => OnPeer(p, raw));
+                var eng = new LanShare(PeerId, GroupCode);
+                lan = eng;
+                eng.SetGroupName(GroupName, GroupNamedAt);
+                foreach (string id in Forgotten()) eng.Ignore(id);
+                // Remember which group each player was heard in (the sidebar lists only the current group's).
+                eng.PeerData += (p, raw) => { p.Group = eng.Group; OnUi(() => OnPeer(p, raw)); };
+                lan.GroupHeard += OnGroupHeard;
                 lan.Problem += msg => OnUi(() => { if (!quietProblems) Msg(msg, true); });
                 lastProfile = null;
                 UpdateMyProfile();
@@ -72,6 +78,7 @@ namespace QGSCompanion
                 Msg("Sharing couldn't start: " + ex.Message, true);
             }
             header.Invalidate();
+            RefreshGroupBar();
         }
 
         bool quietProblems = true;   // one-off fetch errors (a player closing their app) aren't worth a warning
@@ -79,6 +86,7 @@ namespace QGSCompanion
         void StopSharing()
         {
             if (lan != null) { try { lan.Dispose(); } catch { } lan = null; }
+            StopScout();
         }
 
         void OnUi(Action a)
@@ -90,7 +98,7 @@ namespace QGSCompanion
         void OnPeer(PeerData p, string raw)
         {
             if (p.Id == PeerId || Forgotten().Contains(p.Id)) return;
-            try { SharedStore.Save(p.Id, raw); } catch { }
+            try { SharedStore.Save(p.Id, raw, p.Group); } catch { }
             PeerData old;
             peers.TryGetValue(p.Id, out old);
             int before = old == null ? 0 : old.Chains.Count;
@@ -99,6 +107,7 @@ namespace QGSCompanion
             int added = p.Chains.Count - before;
             Msg(old == null ? p.Nick + " joined - " + Plural(p.Chains.Count, "chain") + " shared."
                 : added > 0 ? p.Nick + " shared " + Plural(added, "new chain") + "." : p.Nick + "'s stats updated.", false);
+            RefreshGroupBar();
         }
 
         // ------------------------------------------------------------------
@@ -115,19 +124,38 @@ namespace QGSCompanion
                     foreach (bool dun in new[] { false, true })
                     {
                         if (dun ? !c.HasDungeon : !c.HasGear) continue;
-                        string key = c.Key + (dun ? "#D" : "#G"), f = ChainFaction(c);
+                        string key = c.Key + (dun ? "#D" : "#G"), f = KeepTag(c, dun, addon.Discovered);
+                        bool both = Starter.IsBoth(c);
                         // A Horde chain and an Alliance chain from the same giver are two different rows.
-                        if (have.Covers(key, f)) continue;
-                        Starter b = Starter.Find(addon.BuiltIn, c.Key, f), d = Starter.Find(addon.Discovered, c.Key, f);
-                        if (b != null && (dun ? b.HasDungeon : b.HasGear)) continue;
-                        bool added = d != null && (dun ? d.HasDungeon : d.HasGear);
+                        // One both factions have seen is only covered by a copy for everyone.
+                        if (both ? have.HasExact(key, null) : have.Covers(key, f)) continue;
+                        string kb, kd;
+                        Starter b = both ? Starter.Locate(addon.BuiltIn, c.Key, null, dun, out kb, null, false) : Starter.LocateFor(addon.BuiltIn, c.Key, f, dun, learned.Factions),
+                                d = both ? Starter.Locate(addon.Discovered, c.Key, null, dun, out kd, null, false) : Starter.Locate(addon.Discovered, c.Key, f, dun);
+                        if (b != null) continue;
+                        bool added = d != null;
                         have.Add(key, f);
-                        outp.Add(new ChainRow { Starter = c, IsDungeon = dun, Status = added ? ChainRow.InDiscoveries : ChainRow.Shared, From = p.Nick, Faction = f });
+                        outp.Add(new ChainRow { Starter = c, IsDungeon = dun, Status = added ? ChainRow.InDiscoveries : ChainRow.Shared, From = p.Nick, Faction = f, Both = both });
                     }
             return outp;
         }
 
         static string ChainFaction(Starter c) { string f = c.Get("faction"); return f == "A" || f == "H" ? f : null; }
+
+        // A chain's faction, or for one shared without a faction (by a version from before factions
+        // were recorded) the tag your own copy of that chain has in `mine`, so a chain you have as
+        // Alliance (or Horde) is never treated as everyone's. Neutral if you have it untagged or not at all.
+        string KeepTag(Starter c, bool dun, Dictionary<string, Starter> mine)
+        {
+            string f = ChainFaction(c);
+            if (f != null || mine == null || Starter.IsBoth(c)) return f;   // seen by both factions: everyone's
+            var holders = Starter.Entries(mine, c.Key).Select(e => e.Value).Where(s => s.Holds(dun)).ToList();
+            if (holders.Count == 0 || holders.Any(s => Starter.Tag(s) == null)) return null;
+            // The copy that is the same chain, else one for a faction you play.
+            var same = holders.FirstOrDefault(s => ChainSig(s, dun) == ChainSig(c, dun));
+            var played = holders.FirstOrDefault(s => learned.Factions != null && learned.Factions.Contains(Starter.Tag(s)));
+            return Starter.Tag(same ?? played ?? holders[0]);
+        }
 
         // Which chain keys we already have, per faction ("untagged" covers every faction).
         class FactionSet
@@ -137,6 +165,11 @@ namespace QGSCompanion
             {
                 List<string> l;
                 return d.TryGetValue(key, out l) && l.Any(x => Starter.SameSide(x, f));
+            }
+            public bool HasExact(string key, string f)
+            {
+                List<string> l;
+                return d.TryGetValue(key, out l) && l.Contains(f);
             }
             public void Add(string key, string f)
             {
@@ -156,12 +189,14 @@ namespace QGSCompanion
                     foreach (bool dun in new[] { false, true })
                     {
                         if (dun ? !c.HasDungeon : !c.HasGear) continue;
-                        string key = c.Key + (dun ? "#D" : "#G"), f = ChainFaction(c);
-                        Starter b = Starter.Find(addon.BuiltIn, c.Key, f);
-                        if (b != null && (dun ? b.HasDungeon : b.HasGear)) continue;
-                        if (have.Covers(key, f)) continue;
+                        string key = c.Key + (dun ? "#D" : "#G"), f = KeepTag(c, dun, addon.Discovered);
+                        bool both = Starter.IsBoth(c);
+                        string kb;
+                        if ((both ? Starter.Locate(addon.BuiltIn, c.Key, null, dun, out kb, null, false)
+                                  : Starter.LocateFor(addon.BuiltIn, c.Key, f, dun, learned.Factions)) != null) continue;
+                        if (both ? have.HasExact(key, null) : have.Covers(key, f)) continue;
                         have.Add(key, f);
-                        list.Add(new ChainRow { Starter = c, IsDungeon = dun, Faction = f });
+                        list.Add(new ChainRow { Starter = c, IsDungeon = dun, Faction = f, Both = both });
                     }
             return list;
         }
@@ -194,11 +229,20 @@ namespace QGSCompanion
             // Chains learned before 1.9.0 have no faction. If you only play one faction they are
             // that faction's, so tag them before sharing (otherwise the other faction would see them).
             string only = learned.Factions != null && learned.Factions.Count == 1 ? learned.Factions.First() : null;
+            // Chains both factions have seen are for everyone for sure: never tagged, and sent marked
+            // "B" so other apps don't mistake them for old chains with an unknown faction.
             var mine = MyRows().Where(r => r.Status == ChainRow.New || r.Status == ChainRow.InDiscoveries || r.Status == ChainRow.Unknown)
-                .Select(r => r.Faction != null || only == null ? r
+                .Select(r => r.Faction != null || r.Both || only == null ? r
                     : new ChainRow { Starter = r.Starter, IsDungeon = r.IsDungeon, Status = r.Status, From = r.From, Faction = only })
                 .ToList();
-            string payload = Profile.Build(PeerId, Nick, myStats, ChainRow.Pack(mine, null).Values);
+            // A giver with another chain for everyone that isn't marked: sent without the mark, as one
+            // entry, so older Companion versions (one entry per giver) don't drop half of it.
+            var plainNeutral = new HashSet<string>(mine.Where(r => !r.Both && r.Faction == null).Select(r => r.Starter.Key));
+            Func<ChainRow, bool> marked = r => r.Both && !plainNeutral.Contains(r.Starter.Key);
+            var both = ChainRow.Pack(mine.Where(marked), null).Values.ToList();
+            foreach (var s in both) s.F["faction"] = "B";
+            var plain = mine.Where(r => !marked(r)).Select(r => r.Both ? new ChainRow { Starter = r.Starter, IsDungeon = r.IsDungeon, Status = r.Status, From = r.From } : r);
+            string payload = Profile.Build(PeerId, Nick, myStats, ChainRow.Pack(plain, null).Values.Concat(both));
             if (payload == lastProfile) return;
             lastProfile = payload;
             lan.SetProfile(Nick, payload);
@@ -517,7 +561,7 @@ namespace QGSCompanion
         internal Form BuildSharingDialog()
         {
             var f = new Form { Text = "Local sharing", FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
-                StartPosition = FormStartPosition.CenterParent, ClientSize = new Size(S(580), S(520)), BackColor = Pal.Card, ForeColor = Pal.Text, Font = fBody, ShowInTaskbar = false };
+                StartPosition = FormStartPosition.CenterParent, ClientSize = new Size(S(580), S(554)), BackColor = Pal.Card, ForeColor = Pal.Text, Font = fBody, ShowInTaskbar = false };
             {
                 var title = new Label { Text = "Share with players on your network", Font = fBig, AutoSize = true, Location = new Point(S(24), S(16)) };
                 var intro = new Label { ForeColor = Pal.Sub, AutoSize = false, Location = new Point(S(24), S(50)), Size = new Size(S(532), S(52)),
@@ -526,15 +570,20 @@ namespace QGSCompanion
                 var on = new CheckBox { Text = "Share with players on my local network", Checked = SharingOn, AutoSize = true, Location = new Point(S(24), S(108)), Font = fBold };
                 var nickL = new Label { Text = "Your nickname (what others see):", AutoSize = true, Location = new Point(S(24), S(142)) };
                 var nickB = new TextBox { Text = Nick, Location = new Point(S(250), S(139)), Width = S(200), MaxLength = 24 };
-                var codeL = new Label { Text = "Group code (agree it with your friends):", AutoSize = true, Location = new Point(S(24), S(176)) };
-                var codeB = new TextBox { Text = GroupCode, Location = new Point(S(250), S(173)), Width = S(200), MaxLength = 40, UseSystemPasswordChar = true };
-                var show = new CheckBox { Text = "Show", AutoSize = true, Location = new Point(S(460), S(175)) };
+                var nameL = new Label { Text = "Group name (anyone nearby sees it):", AutoSize = true, Location = new Point(S(24), S(176)) };
+                // What the boxes started with: a name the group's players pass on while this is open
+                // is only replaced if the user actually typed a different one.
+                string origName = GroupName, origCode = GroupCode;
+                var nameB = new TextBox { Text = origName, Location = new Point(S(250), S(173)), Width = S(200), MaxLength = 24 };
+                var codeL = new Label { Text = "Group code (agree it with your friends):", AutoSize = true, Location = new Point(S(24), S(210)) };
+                var codeB = new TextBox { Text = GroupCode, Location = new Point(S(250), S(207)), Width = S(200), MaxLength = 40, UseSystemPasswordChar = true };
+                var show = new CheckBox { Text = "Show", AutoSize = true, Location = new Point(S(460), S(209)) };
                 show.CheckedChanged += (s, e) => codeB.UseSystemPasswordChar = !show.Checked;
-                var note = new Label { ForeColor = Pal.Sub, AutoSize = false, Location = new Point(S(24), S(206)), Size = new Size(S(532), S(46)),
+                var note = new Label { ForeColor = Pal.Sub, AutoSize = false, Location = new Point(S(24), S(240)), Size = new Size(S(532), S(46)),
                     Text = "Only apps with the same code can join or send you chains. Windows may ask to let this app through its firewall the first time: allow it for private networks." };
-                var err = new Label { ForeColor = Pal.Error, AutoSize = false, Location = new Point(S(24), S(252)), Size = new Size(S(532), S(18)) };
-                var listL = new Label { Text = "Players", Font = fHead, AutoSize = true, Location = new Point(S(24), S(274)) };
-                var lv = new ListView { View = View.Details, FullRowSelect = true, HideSelection = false, Location = new Point(S(24), S(300)),
+                var err = new Label { ForeColor = Pal.Error, AutoSize = false, Location = new Point(S(24), S(286)), Size = new Size(S(532), S(18)) };
+                var listL = new Label { Text = "Players", Font = fHead, AutoSize = true, Location = new Point(S(24), S(308)) };
+                var lv = new ListView { View = View.Details, FullRowSelect = true, HideSelection = false, Location = new Point(S(24), S(334)),
                     Size = new Size(S(532), S(160)), BorderStyle = BorderStyle.FixedSingle };
                 lv.Columns.Add("Player", S(150)); lv.Columns.Add("Faction", S(110)); lv.Columns.Add("Rank", S(110)); lv.Columns.Add("Chains", S(60)); lv.Columns.Add("Seen", S(90));
                 Action fillList = () =>
@@ -551,7 +600,7 @@ namespace QGSCompanion
                 };
                 fillList();
                 var forget = new FlatBtn { Text = "Forget player", Height = S(30), Font = fBody };
-                forget.FitWidth(S(12), S(110)); forget.Location = new Point(S(24), S(470));
+                forget.FitWidth(S(12), S(110)); forget.Location = new Point(S(24), S(504));
                 var unforget = new FlatBtn { Kind = "ghost", Height = S(30), Font = fBody };
                 forget.Click += (s, e) =>
                 {
@@ -577,17 +626,26 @@ namespace QGSCompanion
                     Msg("Forgotten players will be picked up again next time they're online.", false);
                 };
                 var sync = new FlatBtn { Kind = "ghost", Text = "Sync now", Height = S(30), Font = fBody };
-                sync.FitWidth(S(12), S(90)); sync.Location = new Point(forget.Right + S(8), S(470));
-                unforget.Location = new Point(sync.Right + S(4), S(470));
+                sync.FitWidth(S(12), S(90)); sync.Location = new Point(forget.Right + S(8), S(504));
+                unforget.Location = new Point(sync.Right + S(4), S(504));
                 sync.Click += (s, e) => { if (lan != null) { lan.ForgetVersions(); Msg("Asking everyone for their latest chains...", false); } };
-                var save = new FlatBtn { Kind = "primary", Text = "Save", Size = new Size(S(90), S(30)), Location = new Point(S(370), S(470)), Font = fBold };
-                var cancel = new FlatBtn { Text = "Cancel", Size = new Size(S(90), S(30)), Location = new Point(S(466), S(470)) };
+                var save = new FlatBtn { Kind = "primary", Text = "Save", Size = new Size(S(90), S(30)), Location = new Point(S(370), S(504)), Font = fBold };
+                var cancel = new FlatBtn { Text = "Cancel", Size = new Size(S(90), S(30)), Location = new Point(S(466), S(504)) };
                 cancel.Click += (s, e) => f.Close();
                 save.Click += (s, e) =>
                 {
                     string n = Profile.CleanNick(nickB.Text), c = codeB.Text.Trim();
                     if (on.Checked && n == "") { err.Text = "Pick a nickname first."; return; }
                     if (on.Checked && c.Length < 4) { err.Text = "Use a group code of at least 4 characters."; return; }
+                    // A different code is a different group: the old group's name doesn't come along
+                    // (unless it was retyped). A group without a name picks one up from its players.
+                    string gn = Profile.CleanGroupName(nameB.Text);
+                    bool newCode = Profile.GroupHash(c) != Profile.GroupHash(origCode);
+                    bool renamed = gn != origName;
+                    if (newCode && !renamed) gn = "";
+                    if (renamed && gn != "" && NameTakenNearby(gn, c)) { err.Text = "There's already a group called " + gn + " on your network. Pick another name."; return; }
+                    // A new name is passed on to the group's other players (a newer name wins).
+                    if (renamed || newCode) SetGroupNameSetting(gn, gn == "" ? 0 : LanShare.UnixNow());
                     settings["shareOn"] = on.Checked ? "1" : "0";
                     settings["nick"] = n;
                     settings["groupCode"] = c;
@@ -596,7 +654,7 @@ namespace QGSCompanion
                     f.Close();
                 };
                 f.AcceptButton = save; f.CancelButton = cancel;
-                f.Controls.AddRange(new Control[] { title, intro, on, nickL, nickB, codeL, codeB, show, note, err, listL, lv, forget, sync, unforget, save, cancel });
+                f.Controls.AddRange(new Control[] { title, intro, on, nickL, nickB, nameL, nameB, codeL, codeB, show, note, err, listL, lv, forget, sync, unforget, save, cancel });
                 Theme.Form(f);
             }
             return f;
@@ -617,6 +675,12 @@ namespace QGSCompanion
         {
             var p = Profile.Parse(payload);
             if (p != null) { p.LastSeen = DateTime.Now; OnPeer(p, payload); }
+        }
+        // A player heard in the group you're in now.
+        internal void TestPeerInGroup(string payload)
+        {
+            var p = Profile.Parse(payload);
+            if (p != null) { p.LastSeen = DateTime.Now; p.Group = Profile.GroupHash(GroupCode); OnPeer(p, payload); }
         }
         internal void TestFaction(string f) { factionView = f; UpdateFactionPill(); Fill(); }
         internal string TestFactions() { return learned.Factions.Count == 0 ? "none recorded (shows everything)" : string.Join("+", learned.Factions.ToArray()); }

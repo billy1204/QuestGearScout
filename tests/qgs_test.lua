@@ -540,5 +540,110 @@ function UnitFactionGroup() return "Alliance" end
 ns.shared = {}
 QGS.Rebuild()
 
+io.write("Faction saved with every learned chain\n")
+local GIVER = function(id, name) return { kind = "C", id = id, name = name, map = 1429, x = 0.45, y = 0.45 } end
+function UnitFactionGroup() return "Horde" end
+-- Picked up without the quest window (auto-accepted): turning it in still records the faction.
+dialog.npc, dialog.qid, dialog.title, dialog.rewards = "Creature-0-1-2-3-1260-0000", 1210, "Quick Errand", {}
+QuestGearScoutDB.quests[1210] = { title = "Quick Errand", giver = GIVER(1260, "Errand Giver") }
+turnIn(1210, 1260, { { name = "Orcish Cleaver", quality = 2, link = HAXE } })
+check("turning in a quest records the character's faction", QuestGearScoutDB.quests[1210].faction == "H", QuestGearScoutDB.quests[1210].faction)
+-- Recorded before factions were saved: filled in at login if this character has done it.
+QuestGearScoutDB.quests[1200] = { title = "Old Quest", giver = GIVER(1250, "Old Giver"), quality = 2 }
+QuestGearScoutDB.quests[1201] = { title = "Someone Else's", giver = GIVER(1251, "Other Giver"), quality = 2 }
+done[1200] = true
+fire("PLAYER_LOGIN")
+check("login fills in the faction of quests this character has done", QuestGearScoutDB.quests[1200].faction == "H", QuestGearScoutDB.quests[1200].faction)
+check("quests this character hasn't done stay without one", QuestGearScoutDB.quests[1201].faction == nil, QuestGearScoutDB.quests[1201].faction)
+check("the learned chain gets that faction", QGS.starters["C:1250"] ~= nil and QGS.starters["C:1250"].faction == "H")
+-- A quest in the log (taken some other way) counts too.
+QuestGearScoutDB.quests[1202] = { title = "In My Log", giver = GIVER(1252, "Log Giver"), quality = 2 }
+inLog[1202] = true
+QGS.BackfillFactions()
+check("a quest in this character's log gets its faction", QuestGearScoutDB.quests[1202].faction == "H", QuestGearScoutDB.quests[1202].faction)
+inLog[1202] = nil
+-- A Horde character learns a chain: it's listed as Horde.
+local SWORD = "|cff0070dd|Hitem:9100::::::::|h[Herald's Blade]|h|r"
+done[1220], done[1221], inLog[1220], inLog[1221] = nil, nil, nil, nil
+now = now + 900
+offer(1220, "Shared Start", 1270, "Crossroads Herald")
+accept(1220)
+turnIn(1220, 1270)
+offer(1221, "Herald's Reward", 1270, "Crossroads Herald", { { name = "Herald's Blade", quality = 3, link = SWORD } })
+accept(1221)
+turnIn(1221, 1270, { { name = "Herald's Blade", quality = 3, link = SWORD } })
+QGS.Rebuild()
+check("a chain learned by a Horde character is listed as Horde", QGS.starters["C:1270"] ~= nil and QGS.starters["C:1270"].faction == "H",
+    QGS.starters["C:1270"] and tostring(QGS.starters["C:1270"].faction))
+function UnitFactionGroup() return "Alliance" end
+QGS.Rebuild()
+check("an Alliance character isn't shown it yet", QGS.starters["C:1270"] == nil)
+-- An Alliance character sees the chain in game (opens its first quest): now it's for everyone.
+done[1220] = nil
+offer(1220, "Shared Start", 1270, "Crossroads Herald")
+check("the quest notes that both factions have seen it", QuestGearScoutDB.quests[1220].faction == "B", QuestGearScoutDB.quests[1220].faction)
+check("so the chain becomes neutral and the Alliance character sees it",
+    QGS.starters["C:1270"] ~= nil and QGS.starters["C:1270"].faction == nil, QGS.starters["C:1270"] and tostring(QGS.starters["C:1270"].faction))
+function UnitFactionGroup() return "Horde" end
+QGS.Rebuild()
+check("and the Horde character still sees it", QGS.starters["C:1270"] ~= nil and QGS.starters["C:1270"].faction == nil)
+-- The same the other way round: an Alliance chain becomes neutral once a Horde character sees its reward quest.
+function UnitFactionGroup() return "Alliance" end
+QuestGearScoutDB.quests[1225] = { title = "Alliance Start", giver = GIVER(1275, "Wayfarer"), faction = "A" }
+QuestGearScoutDB.quests[1226] = { title = "Alliance Reward", prev = 1225, quality = 3, faction = "A" }
+QGS.Rebuild()
+check("a chain learned by an Alliance character is listed as Alliance", QGS.starters["C:1275"] ~= nil and QGS.starters["C:1275"].faction == "A")
+function UnitFactionGroup() return "Horde" end
+QGS.Rebuild()
+check("a Horde character isn't shown it yet", QGS.starters["C:1275"] == nil)
+offer(1226, "Alliance Reward", 1275, "Wayfarer")
+check("once a Horde character sees it, it's neutral", QuestGearScoutDB.quests[1226].faction == "B" and QGS.starters["C:1275"] ~= nil and QGS.starters["C:1275"].faction == nil)
+-- A Horde chain whose quest turns up in an Alliance character's quest log (taken some other way).
+function UnitFactionGroup() return "Horde" end
+QuestGearScoutDB.quests[1227] = { title = "Horde Errand", giver = GIVER(1277, "Runner"), quality = 3, faction = "H" }
+QGS.Rebuild()
+function UnitFactionGroup() return "Alliance" end
+QGS.Rebuild()
+check("(an Alliance character isn't shown the Horde errand)", QGS.starters["C:1277"] == nil)
+logList = {}
+logAdd(1227, "Horde Errand", "0/1")
+fire("QUEST_LOG_UPDATE")
+check("a quest in an Alliance character's log makes the chain neutral right away",
+    QuestGearScoutDB.quests[1227].faction == "B" and QGS.starters["C:1277"] ~= nil and QGS.starters["C:1277"].faction == nil)
+logList = {}
+function UnitFactionGroup() return "Horde" end
+check("ChainFaction: Alliance start and Horde reward is a wrong link, never shown",
+    QGS.ChainFaction({ faction = "A" }, { faction = "H" }) == "X")
+check("ChainFaction: a reward recorded before factions were saved leaves the chain for everyone",
+    QGS.ChainFaction({ faction = "A" }, {}) == nil and QGS.ChainFaction({}, { faction = "H" }) == "H")
+QuestGearScoutDB.quests[1240] = { title = "Alliance Start", giver = GIVER(1290, "Mislinked"), faction = "A" }
+QuestGearScoutDB.quests[1241] = { title = "Horde Reward", prev = 1240, quality = 3, faction = "H" }
+QGS.Rebuild()
+check("a chain no single faction can do isn't shown", QGS.starters["C:1290"] == nil)
+-- One giver: a Horde gear chain and a dungeon chain both factions did.
+QuestGearScoutDB.settings.dungeons = true
+QuestGearScoutDB.quests[1230] = { title = "Horde Gear", giver = GIVER(1280, "Two Paths"), quality = 3, faction = "H" }
+QuestGearScoutDB.quests[1231] = { title = "Into the Depths", giver = GIVER(1280, "Two Paths"), dungeon = true, dungeonName = "Ragefire Chasm", faction = "B" }
+QGS.Rebuild()
+local tp = QGS.starters["C:1280"]
+check("a giver with a Horde gear chain and a neutral dungeon chain keeps each one's faction",
+    tp ~= nil and tp.gearFaction == "H" and tp.dunFaction == false and tp.faction == nil,
+    tp and (tostring(tp.gearFaction) .. "/" .. tostring(tp.dunFaction) .. "/" .. tostring(tp.faction)))
+local parts = QGS.SplitByFaction(tp)
+check("export shares them as two lines, each with its own faction",
+    #parts == 2 and parts[1].faction == "H" and parts[1].quality and not parts[1].dungeonSteps and parts[2].faction == nil and parts[2].dungeonSteps and not parts[2].quality)
+local back = ns.Decode(ns.Encode(parts))
+local hordeGear, neutralDun = 0, 0
+for _, s in pairs(back) do
+    if s.faction == "H" and s.quality then hordeGear = hordeGear + 1 end
+    if s.faction == nil and s.dungeonSteps then neutralDun = neutralDun + 1 end
+end
+check("...and both come back on import", hordeGear == 1 and neutralDun == 1, hordeGear .. "/" .. neutralDun)
+check("a giver whose chains share a faction exports as one line", #QGS.SplitByFaction(QGS.starters["C:1250"]) == 1)
+function UnitFactionGroup() return "Alliance" end
+QGS.Rebuild()
+check("Alliance sees only the neutral dungeon chain of that giver",
+    QGS.starters["C:1280"] ~= nil and QGS.starters["C:1280"].dungeonSteps ~= nil and QGS.starters["C:1280"].quality == nil)
+
 io.write(string.format("\n%d passed, %d failed\n", passed, failed))
 os.exit(failed == 0 and 0 or 1)

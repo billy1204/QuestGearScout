@@ -68,6 +68,25 @@ function ns.Decode(text)
     return out, count
 end
 
+-- A giver whose gear chain and dungeon chain are for different factions (one Horde-only, one for
+-- everyone, say) is shared as two lines, each with its own faction, so neither chain reaches the
+-- wrong faction. Otherwise the starter as it is.
+local BASE = { "kind", "id", "map", "x", "y", "name", "classes" }
+local GEAR = { "rootQuest", "quality", "steps", "rootTitle", "finalTitle", "item" }
+local DUN  = { "dRoot", "dungeonSteps", "dungeonName", "dungeonTitle", "dRootTitle" }
+function QGS.SplitByFaction(s)
+    local gf, df = s.gearFaction, s.dunFaction
+    if not (s.quality and s.dungeonSteps) or gf == nil or df == nil or gf == df then return { s } end
+    local function part(fields, f)
+        local p = {}
+        for _, k in ipairs(BASE) do p[k] = s[k] end
+        for _, k in ipairs(fields) do p[k] = s[k] end
+        p.faction = f or nil
+        return p
+    end
+    return { part(GEAR, gf), part(DUN, df) }
+end
+
 ---------------------------------------------------------------------------
 -- Copy/paste window
 ---------------------------------------------------------------------------
@@ -132,7 +151,9 @@ local function showExport()
     -- Everyone already has the built-in chains, so share only what you've added.
     local mine = {}
     for key, s in pairs(QGS.starters) do
-        if (QGS.sources and QGS.sources[key]) ~= "bundled" then mine[key] = s end
+        if (QGS.sources and QGS.sources[key]) ~= "bundled" then
+            for i, part in ipairs(QGS.SplitByFaction(s)) do mine[key .. "#" .. i] = part end
+        end
     end
     f.edit:SetText(ns.Encode(mine))
     f:Show()
